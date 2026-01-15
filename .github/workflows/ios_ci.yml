@@ -1,0 +1,31 @@
+name: iOS CI
+
+# iOS support is planned for future phases
+# This workflow is a placeholder
+
+on:
+  workflow_dispatch:  # Manual trigger only for now
+
+jobs:
+  build:
+    runs-on: macos-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Placeholder
+        run: |
+          echo "iOS support is planned for future phases."
+          echo "This workflow will be implemented when iOS development begins."
+          echo ""
+          echo "Planned steps:"
+          echo "1. Build Rust library for iOS (aarch64-apple-ios)"
+          echo "2. Create XCFramework"
+          echo "3. Build iOS app with Xcode"
+          echo "4. Run unit tests"
+
+# Future implementation will include:
+# - Rust cross-compilation for iOS
+# - Swift/SwiftUI app build
+# - Simulator testing
+# - TestFlight deployment

@@ -1,0 +1,44 @@
+# Rust
+rust/target/
+# Note: Cargo.lock is committed for reproducible builds
+
+# Android
+android/.gradle/
+android/.idea/
+android/build/
+android/app/build/
+android/local.properties
+android/*.iml
+android/.DS_Store
+android/captures/
+android/.externalNativeBuild/
+android/.cxx/
+
+# iOS
+ios/build/
+ios/*.xcworkspace/
+ios/*.xcuserdata/
+ios/Pods/
+ios/.DS_Store
+
+# Native libraries (built, not committed)
+android/app/src/main/jniLibs/
+ios/Frameworks/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak

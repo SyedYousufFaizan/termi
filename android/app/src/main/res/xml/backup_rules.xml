@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Include checkpoints for session restoration -->
+    <include domain="file" path="checkpoints" />
+    
+    <!-- Include app preferences -->
+    <include domain="sharedpref" path="." />
+    
+    <!-- Exclude cache files -->
+    <exclude domain="cache" path="." />
+    
+    <!-- Exclude logs -->
+    <exclude domain="file" path="logs" />
+</full-backup-content>
