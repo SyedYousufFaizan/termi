@@ -1,3 +1,9 @@
+<div align="center">
+  <img src="https://capsule-render.vercel.app/api?type=rect&color=0D1117&height=200&section=header&text=Termi&fontSize=80&fontColor=3596F5&animation=fadeIn&fontAlignY=35&desc=The%20Next-Gen%20Terminal%20for%20Android&descAlignY=60&descAlign=50" alt="Termi Header" />
+</div>
+
+---
+
 # Next-Gen Android Terminal
 
 A modern terminal emulator for Android that solves real problems: external storage access, background execution, and poor UX.
