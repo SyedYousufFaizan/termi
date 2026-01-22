@@ -1,4 +1,4 @@
-# 🖥️ Next-Gen Android Terminal
+# Next-Gen Android Terminal
 
 A modern terminal emulator for Android that solves real problems: external storage access, background execution, and poor UX.
 
@@ -6,7 +6,7 @@ A modern terminal emulator for Android that solves real problems: external stora
 ![Platform](https://img.shields.io/badge/platform-Android%2012%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-orange)
 
-## 🎯 What This Solves
+## What This Solves
 
 | Problem | Existing Pain | Our Solution |
 |---------|---------------|--------------|
@@ -15,15 +15,15 @@ A modern terminal emulator for Android that solves real problems: external stora
 | **Poor UX** | Text-only, no file browser | Hybrid UI with native sidebar explorer |
 | **Package Failures** | Termux mirrors often down | GitHub-based package distribution |
 
-## ✨ Key Features
+##  Key Features
 
-- 📁 **External Storage Access** - First terminal with proper SAF integration
-- 💾 **Session Persistence** - Automatic checkpoint/restore on background
-- 🗂️ **Hybrid UI** - Native file explorer alongside terminal
-- 🦀 **Modern Stack** - Rust core + Jetpack Compose UI
-- ⚡ **Fast** - <16ms keystroke latency, 60 FPS rendering
+- **External Storage Access** - First terminal with proper SAF integration
+- **Session Persistence** - Automatic checkpoint/restore on background
+- **Hybrid UI** - Native file explorer alongside terminal
+-  **Modern Stack** - Rust core + Jetpack Compose UI
+- **Fast** - <16ms keystroke latency, 60 FPS rendering
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 ┌─────────────────────────────────────────┐
@@ -37,14 +37,14 @@ A modern terminal emulator for Android that solves real problems: external stora
 └─────────────────────────────────────────┘
 ```
 
-## 📋 Requirements
+##  Requirements
 
 - Android 12+ (API 31)
 - ARM64 device (arm64-v8a)
 - ~15MB storage for core app
 - ~50MB with all packages
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### For Users
 
@@ -74,7 +74,7 @@ cp target/aarch64-linux-android/release/libterminal_core.so \
 
 See [Development Guide](docs/DEVELOPMENT.md) for detailed setup.
 
-## 📚 Documentation
+##  Documentation
 
 | Document | Description |
 |----------|-------------|
@@ -84,7 +84,7 @@ See [Development Guide](docs/DEVELOPMENT.md) for detailed setup.
 | [LIMITATIONS.md](docs/LIMITATIONS.md) | Known constraints and workarounds |
 | [ROADMAP.md](docs/ROADMAP.md) | Development phases and progress |
 
-## 📊 Project Status
+##  Project Status
 
 | Phase | Status | Details |
 |-------|--------|---------|
@@ -93,7 +93,7 @@ See [Development Guide](docs/DEVELOPMENT.md) for detailed setup.
 | Month 2: SAF Integration | ⏳ Pending | External storage access |
 | Month 3: Polish & Packages | ⏳ Pending | File explorer, packages |
 
-## ⚠️ Important Limitations
+##  Important Limitations
 
 Read [LIMITATIONS.md](docs/LIMITATIONS.md) before reporting issues:
 
@@ -101,7 +101,7 @@ Read [LIMITATIONS.md](docs/LIMITATIONS.md) before reporting issues:
 - **Background execution**: OEMs may still kill the app (use internal storage for critical work)
 - **npm/yarn**: Won't work on external storage (symlink-dependent)
 
-## 🤝 Contributing
+##  Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
@@ -110,11 +110,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 - Check VFS capabilities before operations
 - Test on Samsung AND Xiaomi devices
 
-## 📄 License
+##  License
 
 MIT License - see [LICENSE](LICENSE)
 
-## 🙏 Acknowledgments
+##  Acknowledgments
 
 - [portable-pty](https://github.com/AcK77/portable-pty) - PTY implementation
 - [vte](https://github.com/alacritty/vte) - ANSI parsing (from Alacritty)
