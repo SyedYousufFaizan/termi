@@ -9,6 +9,7 @@ import timber.log.Timber
  * Error handling: negative return values indicate errors.
  * 
  * SAFETY: This class must only be used after [loadNativeLibrary] succeeds.
+ * MOCK MODE: If the library is not loaded, this class returns mock data to prevent crashes.
  */
 object TerminalEngine {
     
@@ -91,7 +92,7 @@ object TerminalEngine {
             Timber.i("Native library loaded successfully")
             true
         } catch (e: UnsatisfiedLinkError) {
-            Timber.e(e, "Failed to load native library")
+            Timber.e(e, "Failed to load native library - MOCK MODE ACTIVE")
             false
         }
     }
@@ -100,7 +101,7 @@ object TerminalEngine {
      * Initialize the native library. Call once after loading.
      */
     fun initialize(): Result<Unit> {
-        check(isLoaded) { "Native library not loaded" }
+        if (!isLoaded) return Result.success(Unit) // Mock success
         
         val result = nativeInit()
         return if (result == ErrorCode.SUCCESS) {
@@ -115,7 +116,7 @@ object TerminalEngine {
      * Get the native library version.
      */
     fun getVersion(): String {
-        check(isLoaded) { "Native library not loaded" }
+        if (!isLoaded) return "0.0.0-mock"
         return nativeGetVersion() ?: "unknown"
     }
     
@@ -129,7 +130,7 @@ object TerminalEngine {
      * @return Handle (>0) on success, or error
      */
     fun createSession(sessionId: String): Result<Long> {
-        check(isLoaded) { "Native library not loaded" }
+        if (!isLoaded) return Result.success(999L) // Mock handle
         
         val handle = nativeCreateSession(sessionId)
         return if (handle > 0) {
@@ -144,7 +145,7 @@ object TerminalEngine {
      * Destroy a PTY session and free resources.
      */
     fun destroySession(handle: Long): Result<Unit> {
-        check(isLoaded) { "Native library not loaded" }
+        if (!isLoaded) return Result.success(Unit)
         
         val result = nativeDestroySession(handle)
         return if (result == ErrorCode.SUCCESS) {
@@ -161,7 +162,7 @@ object TerminalEngine {
      * @param shellPath Path to shell (e.g., "/system/bin/sh")
      */
     fun spawnShell(handle: Long, shellPath: String = "/system/bin/sh"): Result<Unit> {
-        check(isLoaded) { "Native library not loaded" }
+        if (!isLoaded) return Result.success(Unit)
         
         val result = nativeSpawnShell(handle, shellPath)
         return if (result == ErrorCode.SUCCESS) {
@@ -177,7 +178,7 @@ object TerminalEngine {
      * @return Number of bytes written, or error
      */
     fun write(handle: Long, data: ByteArray): Result<Int> {
-        check(isLoaded) { "Native library not loaded" }
+        if (!isLoaded) return Result.success(data.size)
         
         val result = nativeWrite(handle, data)
         return if (result >= 0) {
@@ -200,7 +201,7 @@ object TerminalEngine {
      * @return Number of bytes read (0 if no data available), or error
      */
     fun read(handle: Long, buffer: ByteArray): Result<Int> {
-        check(isLoaded) { "Native library not loaded" }
+        if (!isLoaded) return Result.success(0) // No output in mock mode by default
         
         val result = nativeRead(handle, buffer)
         return if (result >= 0) {
@@ -214,7 +215,7 @@ object TerminalEngine {
      * Resize the PTY.
      */
     fun resize(handle: Long, cols: Int, rows: Int): Result<Unit> {
-        check(isLoaded) { "Native library not loaded" }
+        if (!isLoaded) return Result.success(Unit)
         
         val result = nativeResize(handle, cols, rows)
         return if (result == ErrorCode.SUCCESS) {
@@ -229,7 +230,7 @@ object TerminalEngine {
      * Close the PTY (terminate the shell).
      */
     fun close(handle: Long): Result<Unit> {
-        check(isLoaded) { "Native library not loaded" }
+        if (!isLoaded) return Result.success(Unit)
         
         val result = nativeClose(handle)
         return if (result == ErrorCode.SUCCESS) {
@@ -243,7 +244,7 @@ object TerminalEngine {
      * Check if the PTY is running.
      */
     fun isRunning(handle: Long): Boolean {
-        check(isLoaded) { "Native library not loaded" }
+        if (!isLoaded) return true
         return nativeIsRunning(handle)
     }
     
@@ -251,7 +252,7 @@ object TerminalEngine {
      * Get the session state.
      */
     fun getSessionState(handle: Long): Int {
-        check(isLoaded) { "Native library not loaded" }
+        if (!isLoaded) return SessionState.ACTIVE
         return nativeGetSessionState(handle)
     }
     
@@ -259,7 +260,7 @@ object TerminalEngine {
      * Get the exit code (-1 if still running).
      */
     fun getExitCode(handle: Long): Int {
-        check(isLoaded) { "Native library not loaded" }
+        if (!isLoaded) return -1
         return nativeGetExitCode(handle)
     }
     
@@ -268,7 +269,7 @@ object TerminalEngine {
      * Common signals: SIGINT=2, SIGQUIT=3, SIGKILL=9, SIGTERM=15
      */
     fun signal(handle: Long, signal: Int): Result<Unit> {
-        check(isLoaded) { "Native library not loaded" }
+        if (!isLoaded) return Result.success(Unit)
         
         val result = nativeSignal(handle, signal)
         return if (result == ErrorCode.SUCCESS) {
@@ -286,7 +287,7 @@ object TerminalEngine {
      * Check if an operation is supported on a path.
      */
     fun supportsOperation(path: String, operation: Int, isSaf: Boolean): Boolean {
-        check(isLoaded) { "Native library not loaded" }
+        if (!isLoaded) return true
         return nativeSupportsOperation(path, operation, isSaf)
     }
     
@@ -294,7 +295,7 @@ object TerminalEngine {
      * Get a limitation warning for SAF paths (null if none).
      */
     fun getLimitationWarning(isSaf: Boolean): String? {
-        check(isLoaded) { "Native library not loaded" }
+        if (!isLoaded) return null
         val warning = nativeGetLimitationWarning(isSaf)
         return if (warning.isNullOrEmpty()) null else warning
     }
@@ -307,7 +308,7 @@ object TerminalEngine {
      * Checkpoint the session state to disk.
      */
     fun checkpoint(handle: Long, checkpointDir: String): Result<Unit> {
-        check(isLoaded) { "Native library not loaded" }
+        if (!isLoaded) return Result.success(Unit)
         
         val result = nativeCheckpoint(handle, checkpointDir)
         return if (result == ErrorCode.SUCCESS) {

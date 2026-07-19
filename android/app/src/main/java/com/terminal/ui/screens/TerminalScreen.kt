@@ -77,12 +77,20 @@ fun TerminalScreen(
                 )
             }
             
-            // Native library warning
+            // Native library warning (Mock Mode)
             if (!TerminalApplication.isNativeLibraryLoaded) {
-                ErrorBanner(
-                    message = "Native library not loaded. Terminal unavailable.",
-                    onDismiss = {}
-                )
+                Surface(
+                    color = Color(0xFFF57C00), // Orange for warning
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Running in MOCK MODE (Native engine missing)",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(vertical = 4.dp),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
             }
             
             // Terminal output
@@ -112,7 +120,7 @@ fun TerminalScreen(
                     }
                 },
                 focusRequester = focusRequester,
-                enabled = uiState.isConnected
+                enabled = uiState.isConnected || !TerminalApplication.isNativeLibraryLoaded
             )
         }
     }
