@@ -41,10 +41,8 @@ class TerminalViewModel(application: Application) : AndroidViewModel(application
         val checkpointDir = File(application.filesDir, "checkpoints")
         sessionManager = SessionManager(checkpointDir, viewModelScope)
         
-        // Auto-create a session on launch if library is loaded
-        if (TerminalApplication.isNativeLibraryLoaded) {
-            createSession()
-        }
+        // Auto-create a session on launch
+        createSession()
     }
     
     /**
@@ -69,7 +67,12 @@ class TerminalViewModel(application: Application) : AndroidViewModel(application
                     
                     // Add welcome message
                     addOutputLine("Terminal session started")
-                    addOutputLine("Shell: ${session.shellPath}")
+                    if (!TerminalApplication.isNativeLibraryLoaded) {
+                        addOutputLine("--- MOCK MODE ACTIVE ---")
+                        addOutputLine("Type commands to see them echoed back.")
+                    } else {
+                        addOutputLine("Shell: ${session.shellPath}")
+                    }
                     addOutputLine("")
                     
                     // Start collecting output
@@ -131,6 +134,13 @@ class TerminalViewModel(application: Application) : AndroidViewModel(application
         
         // Clear input
         _uiState.update { it.copy(inputText = "") }
+        
+        // If mock mode, echo manually
+        if (!TerminalApplication.isNativeLibraryLoaded) {
+            addOutputLine("$ $command")
+            addOutputLine("Executed: $command (Mock)")
+            return
+        }
         
         viewModelScope.launch(Dispatchers.IO) {
             sessionManager.writeCommand(session.id, command)

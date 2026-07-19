@@ -1,0 +1,27 @@
+# Built artifacts
+/build
+.gradle
+.kotlin
+captures/
+.artifacts/
+.gradle_home/
+
+# Local configuration
+local.properties
+
+# Android Studio / IntelliJ
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/gradle.xml
+.idea/assetWizardSettings.xml
+.idea/dictionaries
+.idea/libraries
+.idea/caches
+.idea/navEditor.xml
+*.iml
+
+# Log files
+*.log
+
+# OS generated files
+.DS_Store
