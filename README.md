@@ -54,7 +54,7 @@ A modern terminal emulator for Android that solves real problems: external stora
 
 ### For Users
 
-1. Download APK from [Releases](https://github.com/yourusername/termi/releases)
+1. Download APK from [Releases](https://github.com/MannanSaood/termi/releases)
 2. Install and grant storage permissions
 3. Mount external directories via Settings
 
@@ -62,7 +62,7 @@ A modern terminal emulator for Android that solves real problems: external stora
 
 ```bash
 # Clone
-git clone https://github.com/yourusername/termi.git
+git clone https://github.com/MannanSaood/termi.git
 cd termi
 
 # Setup (Linux/macOS/WSL)
