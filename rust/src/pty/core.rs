@@ -7,12 +7,14 @@
 //! job fail.
 
 use crate::pty::unix::{child_exit_code, spawn_on_pty, PtyMaster, PtySize};
-use crate::session_state::{SessionState, TerminalState};
-use crate::utils::error::{PtyError, PtyResult};
+use crate::session_state::{CheckpointManager, SessionState, TerminalState};
+use crate::terminal::{Screen, TerminalParser};
+use crate::utils::error::{PtyError, PtyResult, SessionError, SessionResult};
 use crate::utils::sync_ext::LockExt;
 use log::{debug, error, info, warn};
 use std::fs::File;
 use std::io::{Read, Write};
+use std::path::Path;
 use std::process::Child;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -22,6 +24,10 @@ use std::time::Duration;
 pub struct PtySession {
     /// Session state for checkpointing
     state: Arc<Mutex<TerminalState>>,
+    /// Screen buffer owned by this session (shared with the ANSI parser)
+    screen: Arc<Mutex<Screen>>,
+    /// ANSI parser that updates [`screen`] from PTY output
+    parser: TerminalParser,
     /// The PTY master (for resize ioctl)
     master: Option<PtyMaster>,
     /// Writer handle for the PTY
@@ -44,8 +50,15 @@ impl PtySession {
         let state = TerminalState::new(session_id);
         info!("Creating new PTY session: {}", state.session_id);
 
+        let cols = state.dimensions.0.max(1) as usize;
+        let rows = state.dimensions.1.max(1) as usize;
+        let screen = Arc::new(Mutex::new(Screen::new(cols, rows)));
+        let parser = TerminalParser::new(screen.clone());
+
         Ok(Self {
             state: Arc::new(Mutex::new(state)),
+            screen,
+            parser,
             master: None,
             writer: None,
             reader: None,
@@ -65,13 +78,14 @@ impl PtySession {
 
         info!("Spawning shell: {}", shell_path);
 
-        let cwd = self.state.lock().ok().and_then(|state| {
+        let cwd = {
+            let state = self.state.lock_safe();
             if !state.cwd.is_empty() && state.cwd != "/" {
                 Some(state.cwd.clone())
             } else {
                 None
             }
-        });
+        };
 
         let (master, child) = spawn_on_pty(shell_path, self.size, cwd.as_deref())?;
 
@@ -85,9 +99,7 @@ impl PtySession {
         self.running = true;
         self.exit_code = None;
 
-        if let Ok(mut state) = self.state.lock() {
-            state.transition_to(SessionState::Active);
-        }
+        self.state.lock_safe().transition_to(SessionState::Active);
 
         info!("Shell spawned successfully");
         Ok(())
@@ -131,6 +143,9 @@ impl PtySession {
             }
             Ok(n) => {
                 debug!("PTY read: {} bytes", n);
+                if n > 0 {
+                    self.feed_output(&buf[..n]);
+                }
                 Ok(n)
             }
             Err(e) => {
@@ -194,6 +209,10 @@ impl PtySession {
             Some(Ok(n)) => {
                 let shared = shared_buf.lock_safe();
                 buf[..n].copy_from_slice(&shared[..n]);
+                drop(shared);
+                if n > 0 {
+                    self.feed_output(&buf[..n]);
+                }
                 Ok(n)
             }
             Some(Err(e)) => Err(PtyError::ReadFailed(e)),
@@ -216,9 +235,8 @@ impl PtySession {
             master.resize(self.size)?;
         }
 
-        if let Ok(mut state) = self.state.lock() {
-            state.dimensions = (cols, rows);
-        }
+        self.screen.lock_safe().resize(cols as usize, rows as usize);
+        self.state.lock_safe().dimensions = (cols, rows);
 
         Ok(())
     }
@@ -233,9 +251,9 @@ impl PtySession {
                     self.exit_code = Some(code);
                     self.running = false;
 
-                    if let Ok(mut state) = self.state.lock() {
-                        state.transition_to(SessionState::Checkpointed);
-                    }
+                    self.state
+                        .lock_safe()
+                        .transition_to(SessionState::Checkpointed);
                 }
                 Ok(None) => {}
                 Err(e) => {
@@ -258,31 +276,123 @@ impl PtySession {
         self.exit_code = Some(code);
         self.running = false;
 
-        if let Ok(mut state) = self.state.lock() {
-            state.transition_to(SessionState::Checkpointed);
-        }
+        self.state
+            .lock_safe()
+            .transition_to(SessionState::Checkpointed);
 
         Ok(code)
     }
 
-    /// Get current session state
-    pub fn session_state(&self) -> SessionState {
-        self.state
-            .lock()
-            .map(|s| s.state)
-            .unwrap_or(SessionState::Failed)
+    /// Feed PTY (or test) output through the ANSI parser into the screen.
+    ///
+    /// This is the missing link that used to leave `TerminalState.screen_buffer`
+    /// empty on checkpoint: Kotlin reads raw bytes, but checkpoint needs the
+    /// parsed grid. Safe to call without a live PTY (used by host tests).
+    pub fn feed_output(&mut self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        self.parser.process(bytes);
+        self.sync_cursor_from_screen();
     }
 
-    /// Get terminal state for checkpointing
+    fn sync_cursor_from_screen(&self) {
+        let screen = self.screen.lock_safe();
+        let (cols, rows) = screen.size();
+        let (crow, ccol) = screen.cursor();
+        drop(screen);
+        let mut state = self.state.lock_safe();
+        state.cursor_position = (crow as u32, ccol as u32);
+        state.dimensions = (cols as u16, rows as u16);
+    }
+
+    /// Snapshot parser screen + session metadata into a [`TerminalState`]
+    /// suitable for `CheckpointManager`.
+    pub fn capture_state(&self) -> TerminalState {
+        let screen = self.screen.lock_safe();
+        let mut state = self.state.lock_safe().clone();
+        state.screen_buffer = screen.to_screen_lines();
+        let (crow, ccol) = screen.cursor();
+        let (cols, rows) = screen.size();
+        state.cursor_position = (crow as u32, ccol as u32);
+        state.dimensions = (cols as u16, rows as u16);
+        state.scrollback_size = screen.scrollback_len();
+        state
+    }
+
+    /// Write a checkpoint of the current screen to `checkpoint_dir`.
+    ///
+    /// Does not kill the child. Call this on backgrounding; Android may
+    /// still kill the process afterwards.
+    pub fn checkpoint(&self, checkpoint_dir: impl AsRef<Path>) -> SessionResult<()> {
+        let snapshot = self.capture_state();
+        let mut manager = CheckpointManager::new(checkpoint_dir.as_ref());
+        manager.force_checkpoint(&snapshot)?;
+        Ok(())
+    }
+
+    /// Rebuild a session from a checkpoint file.
+    ///
+    /// The restored session is **not running** — the original shell is gone.
+    /// The caller (Kotlin) should `spawn_shell` afterwards if a live PTY is
+    /// needed; the screen contents are what the user sees as "restored."
+    pub fn restore_from_disk(
+        session_id: &str,
+        checkpoint_dir: impl AsRef<Path>,
+    ) -> SessionResult<Self> {
+        let manager = CheckpointManager::new(checkpoint_dir.as_ref());
+        let restored = manager.restore(session_id)?;
+        let mut session = PtySession::new(restored.session_id.clone())
+            .map_err(|e| SessionError::RestoreFailed(e.to_string()))?;
+        session.apply_restored_state(restored);
+        Ok(session)
+    }
+
+    /// Apply an already-loaded checkpoint to this session's screen.
+    pub fn apply_restored_state(&mut self, restored: TerminalState) {
+        {
+            let mut screen = self.screen.lock_safe();
+            screen.restore_from_checkpoint(&restored);
+        }
+        let dims = restored.dimensions;
+        self.size = PtySize {
+            cols: dims.0,
+            rows: dims.1,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        *self.state.lock_safe() = restored;
+        self.sync_cursor_from_screen();
+    }
+
+    /// Visible screen as plain text (tests / debugging).
+    pub fn screen_text(&self) -> String {
+        self.screen.lock_safe().to_text()
+    }
+
+    /// Current screen dimensions (cols, rows).
+    pub fn screen_size(&self) -> (usize, usize) {
+        self.screen.lock_safe().size()
+    }
+
+    /// Copy of the cell at `(row, col)`, if in range.
+    pub fn cell_at(&self, row: usize, col: usize) -> Option<crate::terminal::Cell> {
+        self.screen.lock_safe().get_cell(row, col).copied()
+    }
+
+    /// Get current session state
+    pub fn session_state(&self) -> SessionState {
+        self.state.lock_safe().state
+    }
+
+    /// Get terminal state for checkpointing (includes live screen contents)
     pub fn terminal_state(&self) -> Option<TerminalState> {
-        self.state.lock().ok().map(|s| s.clone())
+        Some(self.capture_state())
     }
 
     /// Update terminal state (for restoration)
     pub fn set_terminal_state(&mut self, new_state: TerminalState) {
-        if let Ok(mut state) = self.state.lock() {
-            *state = new_state;
-        }
+        self.apply_restored_state(new_state);
     }
 
     /// Check if PTY is still running
@@ -297,10 +407,7 @@ impl PtySession {
 
     /// Get session ID
     pub fn session_id(&self) -> String {
-        self.state
-            .lock()
-            .map(|s| s.session_id.clone())
-            .unwrap_or_default()
+        self.state.lock_safe().session_id.clone()
     }
 
     /// Send a signal to the PTY process (Unix-like behavior)
@@ -343,9 +450,9 @@ impl PtySession {
         self.master = None;
         self.running = false;
 
-        if let Ok(mut state) = self.state.lock() {
-            state.transition_to(SessionState::Checkpointed);
-        }
+        self.state
+            .lock_safe()
+            .transition_to(SessionState::Checkpointed);
 
         Ok(())
     }
@@ -396,5 +503,76 @@ mod tests {
 
         session.close().unwrap();
         assert!(!session.is_running());
+    }
+
+    #[test]
+    fn test_feed_output_updates_screen() {
+        let mut session = PtySession::new("feed").unwrap();
+        session.feed_output(b"hello");
+        let text = session.screen_text();
+        assert!(text.contains("hello"), "screen was: {text:?}");
+        let state = session.capture_state();
+        assert!(
+            state
+                .screen_buffer
+                .iter()
+                .any(|line| line.text.contains("hello")),
+            "checkpoint buffer missed parsed output: {:?}",
+            state.screen_buffer
+        );
+    }
+
+    #[test]
+    fn test_checkpoint_restore_roundtrip_screen() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "termi_pty_ckpt_{}_{}",
+            std::process::id(),
+            "roundtrip"
+        ));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        let mut session = PtySession::new("roundtrip").unwrap();
+        session.feed_output(b"\x1b[31mRed\x1b[0m!");
+        let before = session.screen_text();
+        let before_cursor = session.capture_state().cursor_position;
+
+        session.checkpoint(&temp_dir).expect("checkpoint");
+
+        let restored = PtySession::restore_from_disk("roundtrip", &temp_dir).expect("restore");
+        assert!(!restored.is_running());
+        assert_eq!(restored.session_state(), SessionState::Restored);
+        assert_eq!(restored.screen_text(), before);
+        assert_eq!(restored.capture_state().cursor_position, before_cursor);
+        let cell = restored.cell_at(0, 0).unwrap().fg;
+        assert_eq!(cell, crate::terminal::colors::RED);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_restore_missing_checkpoint() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "termi_pty_ckpt_{}_{}",
+            std::process::id(),
+            "missing"
+        ));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let result = PtySession::restore_from_disk("nope", &temp_dir);
+        assert!(matches!(
+            result,
+            Err(SessionError::Checkpoint(
+                crate::session_state::CheckpointError::NotFound(_)
+            ))
+        ));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_resize_updates_screen() {
+        let mut session = PtySession::new("resize").unwrap();
+        session.resize(40, 12).unwrap();
+        let state = session.capture_state();
+        assert_eq!(state.dimensions, (40, 12));
+        assert_eq!(session.screen_size(), (40, 12));
     }
 }

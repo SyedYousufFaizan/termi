@@ -80,6 +80,10 @@ pub struct TerminalState {
     pub version: u32,
 }
 
+/// Current checkpoint format version. Bump when `TerminalState` fields
+/// change in a way that old files cannot be deserialized.
+pub const CHECKPOINT_VERSION: u32 = 1;
+
 /// Single line in the screen buffer
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScreenLine {
@@ -113,7 +117,7 @@ impl Default for TerminalState {
             scrollback_size: 10000,
             dimensions: (80, 24),
             checkpoint_time: 0,
-            version: 1,
+            version: CHECKPOINT_VERSION,
         }
     }
 }
@@ -266,6 +270,13 @@ impl CheckpointManager {
 
         let mut state: TerminalState = bincode::deserialize(&data)
             .map_err(|e| CheckpointError::Deserialization(e.to_string()))?;
+
+        if state.version != CHECKPOINT_VERSION {
+            return Err(CheckpointError::VersionMismatch {
+                expected: CHECKPOINT_VERSION,
+                found: state.version,
+            });
+        }
 
         // Update state to indicate restoration
         state.state = SessionState::Restored;
@@ -451,5 +462,28 @@ mod tests {
 
         assert_ne!(id1, id2);
         assert!(id1.starts_with("session_"));
+    }
+
+    #[test]
+    fn test_restore_rejects_version_mismatch() {
+        let temp_dir =
+            env::temp_dir().join(format!("terminal_test_version_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp_dir);
+        let mut manager = CheckpointManager::new(&temp_dir);
+
+        let mut state = TerminalState::new("old_format");
+        state.version = CHECKPOINT_VERSION + 99;
+        manager.force_checkpoint(&state).expect("Checkpoint failed");
+
+        // The file was written with a bumped version; restore must refuse it
+        // rather than silently loading incompatible screen data.
+        let result = manager.restore("old_format");
+        assert!(matches!(
+            result,
+            Err(CheckpointError::VersionMismatch { expected, found })
+                if expected == CHECKPOINT_VERSION && found == CHECKPOINT_VERSION + 99
+        ));
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

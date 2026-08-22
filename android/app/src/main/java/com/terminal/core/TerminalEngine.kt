@@ -312,7 +312,7 @@ object TerminalEngine {
     // ========================================================================
     
     /**
-     * Checkpoint the session state to disk.
+     * Checkpoint the session state to disk (includes parsed screen buffer).
      */
     fun checkpoint(handle: Long, checkpointDir: String): Result<Unit> {
         if (!isLoaded) return Result.success(Unit)
@@ -323,6 +323,27 @@ object TerminalEngine {
             Result.success(Unit)
         } else {
             Result.failure(TerminalException(result, "Checkpoint failed"))
+        }
+    }
+
+    /**
+     * Restore a session from a checkpoint directory.
+     *
+     * Returns a new native handle. The session is not running — call
+     * [spawnShell] afterwards if a live PTY is needed. Screen contents
+     * come from the checkpoint.
+     *
+     * JNI-only: not verified on-device from this change.
+     */
+    fun restore(sessionId: String, checkpointDir: String): Result<Long> {
+        if (!isLoaded) return Result.success(999L)
+
+        val handle = nativeRestore(sessionId, checkpointDir)
+        return if (handle > 0) {
+            Timber.d("Restored session '$sessionId' with handle $handle")
+            Result.success(handle)
+        } else {
+            Result.failure(TerminalException(handle.toInt(), "Failed to restore session"))
         }
     }
     
@@ -376,6 +397,7 @@ object TerminalEngine {
     
     // Checkpointing
     private external fun nativeCheckpoint(handle: Long, checkpointDir: String): Int
+    private external fun nativeRestore(sessionId: String, checkpointDir: String): Long
     
     // Logging
     private external fun nativeLog(level: Int, message: String)

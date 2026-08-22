@@ -3,6 +3,7 @@
 //! Manages the grid of cells that represents the terminal display.
 
 use super::cell::{Cell, CellAttrs, DEFAULT_BG, DEFAULT_FG};
+use crate::session_state::{ScreenLine, StyleSpan, TerminalState};
 use serde::{Deserialize, Serialize};
 
 /// The terminal screen buffer
@@ -28,6 +29,8 @@ pub struct Screen {
     current_fg: u32,
     /// Current background color
     current_bg: u32,
+    /// Saved cursor (DECSC / ANSI CSI `s`), if any
+    saved_cursor: Option<(usize, usize)>,
 }
 
 impl Screen {
@@ -46,6 +49,7 @@ impl Screen {
             current_attrs: CellAttrs::default(),
             current_fg: DEFAULT_FG,
             current_bg: DEFAULT_BG,
+            saved_cursor: None,
         }
     }
 
@@ -147,6 +151,42 @@ impl Screen {
         for row in &mut self.cells {
             for cell in row {
                 cell.reset();
+            }
+        }
+    }
+
+    /// Save cursor position (CSI `s` / DECSC)
+    pub fn save_cursor(&mut self) {
+        self.saved_cursor = Some((self.cursor_row, self.cursor_col));
+    }
+
+    /// Restore cursor position (CSI `u` / DECRC). No-op if nothing was saved.
+    pub fn restore_cursor(&mut self) {
+        if let Some((row, col)) = self.saved_cursor {
+            self.set_cursor(row, col);
+        }
+    }
+
+    /// Clear from the start of the screen through the cursor (CSI J, mode 1)
+    pub fn clear_to_cursor(&mut self) {
+        for row in 0..self.cursor_row {
+            if let Some(line) = self.cells.get_mut(row) {
+                for cell in line {
+                    cell.reset();
+                }
+            }
+        }
+        self.clear_line_to_cursor();
+    }
+
+    /// Clear the current line from column 0 through the cursor (CSI K, mode 1)
+    pub fn clear_line_to_cursor(&mut self) {
+        if let Some(line) = self.cells.get_mut(self.cursor_row) {
+            let end = self.cursor_col.min(self.cols.saturating_sub(1));
+            for col in 0..=end {
+                if let Some(cell) = line.get_mut(col) {
+                    cell.reset();
+                }
             }
         }
     }
@@ -253,6 +293,140 @@ impl Screen {
         }
         result.trim_end().to_string()
     }
+
+    /// Flatten scrollback + visible rows into checkpoint lines.
+    ///
+    /// Scrollback comes first (oldest at index 0), then the visible grid.
+    /// Trailing empty cells on each row are trimmed so the checkpoint stays
+    /// small; restore pads back to the current column width.
+    pub fn to_screen_lines(&self) -> Vec<ScreenLine> {
+        let mut lines = Vec::with_capacity(self.scrollback.len() + self.cells.len());
+        for row in &self.scrollback {
+            lines.push(cells_to_screen_line(row));
+        }
+        for row in &self.cells {
+            lines.push(cells_to_screen_line(row));
+        }
+        lines
+    }
+
+    /// Rebuild this screen from a checkpointed [`TerminalState`].
+    ///
+    /// The last `rows` lines of `screen_buffer` become the visible grid;
+    /// anything before that is scrollback. This is the inverse of
+    /// [`to_screen_lines`]. A restored session is display state only — the
+    /// original shell process is gone (Android will have killed it).
+    pub fn restore_from_checkpoint(&mut self, state: &TerminalState) {
+        let cols = (state.dimensions.0 as usize).max(1);
+        let rows = (state.dimensions.1 as usize).max(1);
+        self.resize(cols, rows);
+
+        let lines = &state.screen_buffer;
+        let visible_start = lines.len().saturating_sub(rows);
+
+        self.scrollback.clear();
+        for line in lines.iter().take(visible_start) {
+            self.scrollback.push(screen_line_to_cells(line, cols));
+            while self.scrollback.len() > self.scrollback_limit {
+                self.scrollback.remove(0);
+            }
+        }
+
+        self.cells = (0..rows)
+            .map(|r| {
+                let idx = visible_start + r;
+                if idx < lines.len() {
+                    screen_line_to_cells(&lines[idx], cols)
+                } else {
+                    vec![Cell::default(); cols]
+                }
+            })
+            .collect();
+
+        self.set_cursor(
+            state.cursor_position.0 as usize,
+            state.cursor_position.1 as usize,
+        );
+    }
+}
+
+/// Collapse a row of cells into a checkpoint line, merging consecutive
+/// same-style runs into [`StyleSpan`]s.
+fn cells_to_screen_line(cells: &[Cell]) -> ScreenLine {
+    let last_nonempty = cells
+        .iter()
+        .rposition(|c| !c.is_empty())
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let slice = &cells[..last_nonempty];
+    if slice.is_empty() {
+        return ScreenLine {
+            text: String::new(),
+            styles: Vec::new(),
+        };
+    }
+
+    let mut text = String::with_capacity(slice.len());
+    let mut styles = Vec::new();
+    let mut span_start = 0;
+    let mut current = style_key(&slice[0]);
+
+    for (i, cell) in slice.iter().enumerate() {
+        text.push(cell.c);
+        let key = style_key(cell);
+        if key != current {
+            styles.push(span_from_cell(span_start, i, &slice[span_start]));
+            span_start = i;
+            current = key;
+        }
+    }
+    styles.push(span_from_cell(span_start, slice.len(), &slice[span_start]));
+
+    ScreenLine { text, styles }
+}
+
+fn style_key(cell: &Cell) -> (u32, u32, bool, bool, bool) {
+    (
+        cell.fg,
+        cell.bg,
+        cell.attrs.bold(),
+        cell.attrs.italic(),
+        cell.attrs.underline(),
+    )
+}
+
+fn span_from_cell(start: usize, end: usize, cell: &Cell) -> StyleSpan {
+    StyleSpan {
+        start,
+        end,
+        foreground: cell.fg,
+        background: cell.bg,
+        bold: cell.attrs.bold(),
+        italic: cell.attrs.italic(),
+        underline: cell.attrs.underline(),
+    }
+}
+
+fn screen_line_to_cells(line: &ScreenLine, cols: usize) -> Vec<Cell> {
+    let mut cells = vec![Cell::default(); cols];
+    let chars: Vec<char> = line.text.chars().collect();
+    for (i, ch) in chars.iter().enumerate().take(cols) {
+        cells[i].c = *ch;
+    }
+    for span in &line.styles {
+        let mut attrs = CellAttrs::new();
+        attrs.set_bold(span.bold);
+        attrs.set_italic(span.italic);
+        attrs.set_underline(span.underline);
+        let end = span.end.min(cols).min(chars.len());
+        let start = span.start.min(end);
+        for cell in cells.iter_mut().take(end).skip(start) {
+            cell.fg = span.foreground;
+            cell.bg = span.background;
+            cell.attrs = attrs;
+        }
+    }
+    cells
 }
 
 impl Default for Screen {
@@ -320,5 +494,101 @@ mod tests {
 
         assert_eq!(screen.size(), (5, 3));
         assert_eq!(screen.cursor(), (2, 4)); // Clamped to new bounds
+    }
+
+    #[test]
+    fn test_save_restore_cursor() {
+        let mut screen = Screen::new(10, 5);
+        screen.set_cursor(2, 4);
+        screen.save_cursor();
+        screen.set_cursor(0, 0);
+        screen.restore_cursor();
+        assert_eq!(screen.cursor(), (2, 4));
+    }
+
+    #[test]
+    fn test_clear_to_cursor_and_line() {
+        let mut screen = Screen::new(8, 3);
+        for c in "AAAAAAAA".chars() {
+            screen.write_char(c);
+        }
+        screen.newline();
+        for c in "BBBBBBBB".chars() {
+            screen.write_char(c);
+        }
+        screen.set_cursor(1, 3);
+        screen.clear_line_to_cursor();
+        assert_eq!(screen.get_cell(1, 0).unwrap().c, ' ');
+        assert_eq!(screen.get_cell(1, 3).unwrap().c, ' ');
+        assert_eq!(screen.get_cell(1, 4).unwrap().c, 'B');
+
+        screen.set_cursor(1, 2);
+        screen.clear_to_cursor();
+        assert_eq!(screen.get_cell(0, 0).unwrap().c, ' ');
+        assert_eq!(screen.get_cell(1, 2).unwrap().c, ' ');
+        assert_eq!(screen.get_cell(1, 4).unwrap().c, 'B');
+    }
+
+    #[test]
+    fn test_checkpoint_lines_roundtrip_preserves_text_and_style() {
+        let mut screen = Screen::new(10, 3);
+        screen.set_fg(0xFFCD0000);
+        let mut attrs = CellAttrs::new();
+        attrs.set_bold(true);
+        screen.set_attrs(attrs);
+        for c in "Hi".chars() {
+            screen.write_char(c);
+        }
+        screen.reset_attrs();
+        screen.write_char('!');
+
+        let mut state = TerminalState::new("snap");
+        state.dimensions = (10, 3);
+        state.cursor_position = {
+            let (r, c) = screen.cursor();
+            (r as u32, c as u32)
+        };
+        state.screen_buffer = screen.to_screen_lines();
+
+        let mut restored = Screen::new(10, 3);
+        restored.restore_from_checkpoint(&state);
+
+        assert_eq!(restored.get_cell(0, 0).unwrap().c, 'H');
+        assert_eq!(restored.get_cell(0, 1).unwrap().c, 'i');
+        assert_eq!(restored.get_cell(0, 2).unwrap().c, '!');
+        assert_eq!(restored.get_cell(0, 0).unwrap().fg, 0xFFCD0000);
+        assert!(restored.get_cell(0, 0).unwrap().attrs.bold());
+        assert!(!restored.get_cell(0, 2).unwrap().attrs.bold());
+        assert_eq!(restored.cursor(), screen.cursor());
+    }
+
+    #[test]
+    fn test_checkpoint_preserves_scrollback() {
+        let mut screen = Screen::new(8, 2);
+        for c in "AAAA".chars() {
+            screen.write_char(c);
+        }
+        // Push the current top row into scrollback without depending on wrap.
+        screen.scroll_up();
+        screen.set_cursor(0, 0);
+        for c in "BBBB".chars() {
+            screen.write_char(c);
+        }
+        screen.newline();
+        for c in "CCCC".chars() {
+            screen.write_char(c);
+        }
+        assert_eq!(screen.scrollback_len(), 1);
+
+        let mut state = TerminalState::new("scroll");
+        state.dimensions = (8, 2);
+        state.screen_buffer = screen.to_screen_lines();
+
+        let mut restored = Screen::new(8, 2);
+        restored.restore_from_checkpoint(&state);
+        assert_eq!(restored.scrollback_len(), 1);
+        let scrolled = restored.get_scrollback_line(0).unwrap();
+        assert_eq!(scrolled[0].c, 'A');
+        assert_eq!(restored.get_cell(1, 0).unwrap().c, 'C');
     }
 }

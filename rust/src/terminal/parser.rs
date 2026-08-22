@@ -5,7 +5,8 @@
 
 use super::cell::{colors, CellAttrs, DEFAULT_BG, DEFAULT_FG};
 use super::screen::Screen;
-use log::{debug, trace, warn};
+use crate::utils::sync_ext::LockExt;
+use log::{debug, trace};
 use std::sync::{Arc, Mutex};
 use vte::{Params, Parser, Perform};
 
@@ -73,47 +74,45 @@ impl Perform for ParserPerformer {
     /// Called when the parser encounters a printable character
     fn print(&mut self, c: char) {
         trace!("Print: {:?}", c);
-        if let Ok(mut screen) = self.screen.lock() {
-            screen.set_fg(self.fg);
-            screen.set_bg(self.bg);
-            screen.set_attrs(self.attrs);
-            screen.write_char(c);
-        }
+        let mut screen = self.screen.lock_safe();
+        screen.set_fg(self.fg);
+        screen.set_bg(self.bg);
+        screen.set_attrs(self.attrs);
+        screen.write_char(c);
     }
 
     /// Called when the parser encounters a C0/C1 control character
     fn execute(&mut self, byte: u8) {
         trace!("Execute: 0x{:02x}", byte);
-        if let Ok(mut screen) = self.screen.lock() {
-            match byte {
-                // Backspace
-                0x08 => {
-                    screen.move_cursor(0, -1);
-                }
-                // Tab
-                0x09 => {
-                    let (row, col) = screen.cursor();
-                    let next_tab = ((col / 8) + 1) * 8;
-                    let (cols, _) = screen.size();
-                    screen.set_cursor(row, next_tab.min(cols - 1));
-                }
-                // Line feed
-                0x0a => {
-                    screen.newline();
-                }
-                // Carriage return
-                0x0d => {
-                    let (row, _) = screen.cursor();
-                    screen.set_cursor(row, 0);
-                }
-                // Bell
-                0x07 => {
-                    debug!("Bell");
-                    // Could trigger a callback for UI to flash/beep
-                }
-                _ => {
-                    trace!("Unhandled control: 0x{:02x}", byte);
-                }
+        let mut screen = self.screen.lock_safe();
+        match byte {
+            // Backspace
+            0x08 => {
+                screen.move_cursor(0, -1);
+            }
+            // Tab
+            0x09 => {
+                let (row, col) = screen.cursor();
+                let next_tab = ((col / 8) + 1) * 8;
+                let (cols, _) = screen.size();
+                screen.set_cursor(row, next_tab.min(cols.saturating_sub(1)));
+            }
+            // Line feed
+            0x0a => {
+                screen.newline();
+            }
+            // Carriage return
+            0x0d => {
+                let (row, _) = screen.cursor();
+                screen.set_cursor(row, 0);
+            }
+            // Bell
+            0x07 => {
+                debug!("Bell");
+                // Could trigger a callback for UI to flash/beep
+            }
+            _ => {
+                trace!("Unhandled control: 0x{:02x}", byte);
             }
         }
     }
@@ -125,84 +124,72 @@ impl Perform for ParserPerformer {
         // Handle SGR separately to avoid borrow conflicts
         if action == 'm' {
             self.handle_sgr(params);
-            if let Ok(mut screen) = self.screen.lock() {
-                screen.set_fg(self.fg);
-                screen.set_bg(self.bg);
-                screen.set_attrs(self.attrs);
-            }
+            let mut screen = self.screen.lock_safe();
+            screen.set_fg(self.fg);
+            screen.set_bg(self.bg);
+            screen.set_attrs(self.attrs);
             return;
         }
 
-        if let Ok(mut screen) = self.screen.lock() {
-            match action {
-                // Cursor Up
-                'A' => {
-                    let n = get_param(params, 0, 1) as i32;
-                    screen.move_cursor(-n, 0);
+        let mut screen = self.screen.lock_safe();
+        match action {
+            // Cursor Up
+            'A' => {
+                let n = get_param(params, 0, 1) as i32;
+                screen.move_cursor(-n, 0);
+            }
+            // Cursor Down
+            'B' => {
+                let n = get_param(params, 0, 1) as i32;
+                screen.move_cursor(n, 0);
+            }
+            // Cursor Forward
+            'C' => {
+                let n = get_param(params, 0, 1) as i32;
+                screen.move_cursor(0, n);
+            }
+            // Cursor Back
+            'D' => {
+                let n = get_param(params, 0, 1) as i32;
+                screen.move_cursor(0, -n);
+            }
+            // Cursor Position (CUP)
+            'H' | 'f' => {
+                let row = get_param(params, 0, 1).saturating_sub(1);
+                let col = get_param(params, 1, 1).saturating_sub(1);
+                screen.set_cursor(row as usize, col as usize);
+            }
+            // Erase in Display
+            'J' => {
+                let mode = get_param(params, 0, 0);
+                match mode {
+                    0 => screen.clear_to_end(),
+                    1 => screen.clear_to_cursor(),
+                    2 | 3 => screen.clear(),
+                    _ => {}
                 }
-                // Cursor Down
-                'B' => {
-                    let n = get_param(params, 0, 1) as i32;
-                    screen.move_cursor(n, 0);
+            }
+            // Erase in Line
+            'K' => {
+                let mode = get_param(params, 0, 0);
+                match mode {
+                    0 => screen.clear_line_from_cursor(),
+                    1 => screen.clear_line_to_cursor(),
+                    2 => screen.clear_line(),
+                    _ => {}
                 }
-                // Cursor Forward
-                'C' => {
-                    let n = get_param(params, 0, 1) as i32;
-                    screen.move_cursor(0, n);
-                }
-                // Cursor Back
-                'D' => {
-                    let n = get_param(params, 0, 1) as i32;
-                    screen.move_cursor(0, -n);
-                }
-                // Cursor Position (CUP)
-                'H' | 'f' => {
-                    let row = get_param(params, 0, 1).saturating_sub(1);
-                    let col = get_param(params, 1, 1).saturating_sub(1);
-                    screen.set_cursor(row as usize, col as usize);
-                }
-                // Erase in Display
-                'J' => {
-                    let mode = get_param(params, 0, 0);
-                    match mode {
-                        0 => screen.clear_to_end(),
-                        1 => {
-                            // Clear from beginning to cursor (not commonly used)
-                            warn!("Clear to cursor not implemented");
-                        }
-                        2 | 3 => screen.clear(),
-                        _ => {}
-                    }
-                }
-                // Erase in Line
-                'K' => {
-                    let mode = get_param(params, 0, 0);
-                    match mode {
-                        0 => screen.clear_line_from_cursor(),
-                        1 => {
-                            // Clear from beginning to cursor
-                            warn!("Clear line to cursor not implemented");
-                        }
-                        2 => screen.clear_line(),
-                        _ => {}
-                    }
-                }
-                // Device Status Report
-                'n' => {
-                    // Typically asks for cursor position - we'd need to send response
-                    debug!("DSR request (ignored)");
-                }
-                // Save cursor position
-                's' => {
-                    debug!("Save cursor (not implemented)");
-                }
-                // Restore cursor position
-                'u' => {
-                    debug!("Restore cursor (not implemented)");
-                }
-                _ => {
-                    debug!("Unhandled CSI: {} with params {:?}", action, params);
-                }
+            }
+            // Device Status Report
+            'n' => {
+                // Typically asks for cursor position - we'd need to send response
+                debug!("DSR request (ignored)");
+            }
+            // Save cursor position
+            's' => screen.save_cursor(),
+            // Restore cursor position
+            'u' => screen.restore_cursor(),
+            _ => {
+                debug!("Unhandled CSI: {} with params {:?}", action, params);
             }
         }
     }
@@ -239,7 +226,8 @@ impl Perform for ParserPerformer {
         match byte {
             b'c' => {
                 // Reset terminal
-                if let Ok(mut screen) = self.screen.lock() {
+                {
+                    let mut screen = self.screen.lock_safe();
                     screen.clear();
                     screen.reset_attrs();
                 }
@@ -447,5 +435,31 @@ mod tests {
 
         let screen = screen.lock().unwrap();
         assert_eq!(screen.get_cell(0, 0).unwrap().c, ' ');
+    }
+
+    #[test]
+    fn test_parser_save_restore_cursor() {
+        let screen = Arc::new(Mutex::new(Screen::new(80, 24)));
+        let mut parser = TerminalParser::new(screen.clone());
+
+        parser.process(b"\x1b[5;10H\x1b[s\x1b[1;1HX\x1b[uY");
+
+        let screen = screen.lock().unwrap();
+        assert_eq!(screen.get_cell(0, 0).unwrap().c, 'X');
+        assert_eq!(screen.get_cell(4, 9).unwrap().c, 'Y');
+    }
+
+    #[test]
+    fn test_parser_erase_to_cursor() {
+        let screen = Arc::new(Mutex::new(Screen::new(10, 2)));
+        let mut parser = TerminalParser::new(screen.clone());
+
+        parser.process(b"ABCDEFGH");
+        parser.process(b"\x1b[1;5H\x1b[1K");
+
+        let screen = screen.lock().unwrap();
+        assert_eq!(screen.get_cell(0, 0).unwrap().c, ' ');
+        assert_eq!(screen.get_cell(0, 4).unwrap().c, ' ');
+        assert_eq!(screen.get_cell(0, 5).unwrap().c, 'F');
     }
 }

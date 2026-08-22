@@ -5,18 +5,32 @@ the README claimed and what was actually built. This file is the
 single source of truth for "is X actually done" — keep it updated as
 Phase 1 progresses, and check it before assuming a feature exists.
 
-Last updated: as of the Phase 1b/1d safety + VFS pass (Rust core only —
-see "What's NOT done" below for the honest boundary of this pass).
+Last updated: as of the PTY screen ↔ checkpoint wiring pass (Rust core;
+JNI restore is type-checked only, not run on a device).
 
-## 1a. Core terminal — mostly pre-existing, unchanged this pass
+## 1a. Core terminal — parser/screen now attached to the PTY session
 
-- PTY spawn, read/write, ANSI parsing, screen buffer: implemented,
-  pre-existing. Not touched in this pass beyond the safety fix below.
-- **Fixed this pass**: 5 `Mutex::lock().unwrap()` calls in
+- PTY spawn, read/write, ANSI parsing, screen buffer: implemented.
+- **This pass (host-tested):** `PtySession` owns a `TerminalParser` +
+  `Screen`. Every PTY `read` / `read_timeout` (and a public `feed_output`
+  for tests) runs bytes through the parser. `checkpoint()` snapshots the
+  live grid (including scrollback and style spans) into `TerminalState`.
+  `restore_from_disk()` rebuilds the screen from that file. The restored
+  session is **not running** — Android already killed the old shell; the
+  caller must `spawn_shell` if a live PTY is needed. Display state is
+  what "Restored" means.
+- CSI gaps filled on the same path: erase-to-cursor (CSI J/K mode 1) and
+  save/restore cursor (CSI `s`/`u`). Parser mutexes use `lock_safe()`.
+- Checkpoint format version is enforced (`CHECKPOINT_VERSION`); mismatch
+  is a hard error, not a silent load.
+- **JNI:** `nativeCheckpoint` now goes through `PtySession::checkpoint`
+  (so the screen is included). New `nativeRestore(sessionId, dir) -> handle`
+  is exported and has a matching Kotlin `external fun`. **Not run on a
+  device** — `cargo check --features android` only. Kotlin `SessionManager`
+  still does not call `restore()`.
+- **Fixed previously:** 5 `Mutex::lock().unwrap()` calls in
   `pty/core.rs`'s `read_timeout` path replaced with
-  `utils::sync_ext::LockExt::lock_safe()`, which recovers from lock
-  poisoning instead of cascading a panic across threads. Covered by new
-  tests in `utils/sync_ext.rs`.
+  `utils::sync_ext::LockExt::lock_safe()`.
 
 ## 1b. Safety cleanup — DONE (Rust core)
 
@@ -34,10 +48,7 @@ see "What's NOT done" below for the honest boundary of this pass).
   `#[cfg(feature = "android")]`-gated half (actual `JNIEnv` calls).
   `Cargo.toml` default features changed from `["android"]` to `[]`
   accordingly. This is what makes `cargo test` work with zero Android
-  setup — verified: 64/64 tests pass with `--no-default-features`, and
-  the `android`-gated code separately verified to type-check cleanly with
-  `cargo check --features android` (confirmed against a pinned
-  toolchain during this pass; CI runs it against current stable Rust).
+  setup.
 
 ## 1d. VFS/SAF capability system — the actual product — SUBSTANTIALLY ADVANCED, still not wired to real Android
 
@@ -85,10 +96,8 @@ see "What's NOT done" below for the honest boundary of this pass).
 - No Kotlin code calls into `VfsService` yet — the JNI exports
   (`android_jni.rs`) haven't been extended to expose it. Kotlin currently
   has no way to trigger the new capability-checked operations.
-- Nothing in this pass was run on an actual Android device or emulator —
-  no Android SDK/NDK was available in the environment this work was done
-  in. Everything above is verified via `cargo test`/`cargo check` on a
-  host Linux toolchain only.
+- Nothing VFS-related in this pass was run on an actual Android device or
+  emulator.
 
 ## 1c. Keyboard UX — scaffolded, not implemented
 
@@ -104,19 +113,29 @@ see "What's NOT done" below for the honest boundary of this pass).
 No changes this pass. `package/manager.rs` and `package/repository.rs`
 remain scaffolding. See `docs/ROADMAP.md`.
 
-## 1f. Polish — unchanged
+## 1f. Polish — checkpoint/restore core done; UI still disconnected
 
-Session tabs, copy/paste, settings screen: no changes this pass.
+Rust can now checkpoint and restore the parsed screen. Kotlin
+`TerminalEngine.restore()` exists as a JNI wrapper only. `SessionManager`,
+`TerminalService`, and `SessionStateBanner` are still not wired to that
+path. Settings/tabs/copy-paste unchanged. The current APK still displays
+raw PTY bytes (ANSI stripped in the ViewModel), so the restored *native*
+screen is not what the Compose UI shows until that is connected.
 
 ## Verification commands (reproduce this yourself)
 
 ```bash
 cd rust
-cargo test                                  # 64 passed, 0 failed, 1 ignored
-cargo check --features android --all-targets  # type-checks clean
-cargo build --no-default-features           # builds clean, zero warnings
+cargo test                                  # 80 passed (77 lib + 3 integration placeholders), 0 failed, 1 ignored
+cargo check --features android --all-targets  # type-checks clean, including nativeRestore
+cargo clippy --all-targets -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+cargo clippy --features android -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+cargo build --release
 ```
 
 The 1 ignored test (`test_pty_spawn_and_command`) requires spawning a real
 shell binary and is ignored in this sandboxed environment — not a
 regression, pre-existing.
+
+**Not verified:** JNI `nativeRestore` runtime, Kotlin compile/Gradle, on-device
+checkpoint after process death. Those need an Android SDK/device.

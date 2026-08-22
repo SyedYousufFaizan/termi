@@ -16,7 +16,7 @@ use crate::jni_safe::{
     JniErrorCode,
 };
 use crate::pty::PtySession;
-use crate::session_state::{CheckpointManager, SessionState};
+use crate::session_state::SessionState;
 use crate::vfs::capabilities::{VfsCapabilities, VfsOperation};
 
 use jni::objects::{JByteArray, JClass, JString};
@@ -394,10 +394,13 @@ pub extern "system" fn Java_com_terminal_core_TerminalEngine_nativeGetLimitation
 // Checkpointing
 // ============================================================================
 
-// Note: Checkpointing is handled internally by PtySession
-// The Kotlin layer just needs to trigger checkpoint/restore via these methods
+// PtySession owns the parser/screen and snapshots them into TerminalState.
+// Kotlin only triggers checkpoint/restore — it must not assemble the buffer
+// itself. nativeRestore returns a *new* handle: after process death the old
+// one is gone. The restored session is not running; call nativeSpawnShell
+// if a live PTY is needed. Screen contents are what the user sees as restored.
 
-/// Trigger checkpoint of session state
+/// Trigger checkpoint of session state (including parsed screen contents)
 #[no_mangle]
 pub extern "system" fn Java_com_terminal_core_TerminalEngine_nativeCheckpoint<'local>(
     mut env: JNIEnv<'local>,
@@ -415,13 +418,7 @@ pub extern "system" fn Java_com_terminal_core_TerminalEngine_nativeCheckpoint<'l
         Err(e) => return e.into(),
     };
 
-    let state = match session.terminal_state() {
-        Some(s) => s,
-        None => return JniErrorCode::PtyError.into(),
-    };
-
-    let mut manager = CheckpointManager::new(&dir);
-    match manager.force_checkpoint(&state) {
+    match session.checkpoint(&dir) {
         Ok(_) => {
             info!("Checkpoint saved to {}", dir);
             JniErrorCode::Success.into()
@@ -429,6 +426,44 @@ pub extern "system" fn Java_com_terminal_core_TerminalEngine_nativeCheckpoint<'l
         Err(e) => {
             error!("Checkpoint failed: {:?}", e);
             JniErrorCode::IoError.into()
+        }
+    }
+}
+
+/// Restore a session from disk. Returns a new handle (>0) or an error code (<0).
+///
+/// The restored session is display-only until nativeSpawnShell is called.
+/// This function is type-checked with `--features android`; it is not
+/// exercised by `cargo test` (no JVM).
+#[no_mangle]
+pub extern "system" fn Java_com_terminal_core_TerminalEngine_nativeRestore<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session_id: JString<'local>,
+    checkpoint_dir: JString<'local>,
+) -> jlong {
+    let session_id = match safe_get_string(&mut env, &session_id) {
+        Ok(s) => s,
+        Err(e) => return e as jlong,
+    };
+
+    let dir = match safe_get_string(&mut env, &checkpoint_dir) {
+        Ok(s) => s,
+        Err(e) => return e as jlong,
+    };
+
+    match PtySession::restore_from_disk(&session_id, &dir) {
+        Ok(session) => {
+            let handle = handle_box(session);
+            info!(
+                "Restored session '{}' from {} with handle {}",
+                session_id, dir, handle
+            );
+            handle
+        }
+        Err(e) => {
+            error!("Restore failed for '{}': {:?}", session_id, e);
+            JniErrorCode::IoError as jlong
         }
     }
 }

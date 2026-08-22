@@ -45,7 +45,7 @@ pub mod android_jni;
 
 // Re-exports for convenience
 pub use jni_safe::JniErrorCode;
-pub use session_state::{CheckpointManager, SessionState, TerminalState};
+pub use session_state::{CheckpointManager, SessionState, TerminalState, CHECKPOINT_VERSION};
 pub use utils::error::{Result, TerminalError};
 pub use vfs::capabilities::{VfsCapabilities, VfsOperation};
 
