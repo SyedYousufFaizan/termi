@@ -11,11 +11,22 @@
 //! This crate provides safe wrappers for JNI operations. All JNI code
 //! MUST use the wrappers in `jni_safe` module. Never use unwrap() on
 //! JNI boundaries - always handle errors explicitly.
+//!
+//! ## Panic policy (Phase 1b)
+//!
+//! `clippy::unwrap_used` and `clippy::expect_used` are enforced as warnings
+//! crate-wide via `cargo clippy -- -D warnings` in CI. Production code must
+//! not call `.unwrap()`/`.expect()` — propagate a proper error via the types
+//! in `utils::error`, or use `utils::sync_ext::LockExt::lock_safe()` for
+//! mutex locks. Test modules are explicitly exempted with
+//! `#[allow(clippy::unwrap_used, clippy::expect_used)]` on the `mod tests`
+//! block, since unwrap-in-tests is normal, idiomatic Rust — this policy is
+//! about production code paths, not test assertions.
+#![warn(clippy::unwrap_used, clippy::expect_used)]
 
 // Core safety modules (Week 0 foundation)
 pub mod jni_safe;
 pub mod session_state;
-pub mod vfs_capabilities;
 
 // Utility modules
 pub mod utils;
@@ -35,7 +46,7 @@ pub mod android_jni;
 // Re-exports for convenience
 pub use jni_safe::JniErrorCode;
 pub use session_state::{CheckpointManager, SessionState, TerminalState};
-pub use vfs_capabilities::{VfsCapabilities, VfsOperation};
+pub use vfs::capabilities::{VfsCapabilities, VfsOperation};
 pub use utils::error::{TerminalError, Result};
 
 /// Library version
@@ -50,6 +61,7 @@ pub fn init() {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

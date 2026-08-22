@@ -1,0 +1,82 @@
+---
+description: Rust core conventions and testing workflow
+globs: rust/**/*.rs
+---
+
+# Rust Core Conventions
+
+## Build/test commands — use these exact invocations
+
+```bash
+# Fast loop — no Android SDK/NDK required, this is what you should run
+# after almost every change:
+cd rust && cargo test
+
+# Before committing, also verify the JNI-boundary code still type-checks
+# (it won't *run* here, but a signature drift should be caught):
+cd rust && cargo check --features android --all-targets
+
+# Full lint pass matching CI exactly:
+cd rust && cargo clippy --all-targets -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+cd rust && cargo clippy --features android -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+```
+
+If `cargo test` fails to build because it's trying to pull in the `jni`
+crate, check that you haven't accidentally added `jni::`-typed code (e.g.
+`jni::sys::jlong`) to a function outside a `#[cfg(feature = "android")]`
+block — see `jni_safe.rs` for the pattern of keeping handle-management
+logic host-testable while gating actual `JNIEnv` calls.
+
+## Module map
+
+- `vfs/capabilities.rs` — the capability model: what operations
+  (chmod/symlink/rename/...) are supported per filesystem type, with
+  human-readable reasons. Pure logic, no I/O.
+- `vfs/provider.rs` — the `FsProvider` trait every storage backend
+  implements. `chmod`/`symlink`/`readlink` have default "not supported"
+  implementations — only override them if the backend genuinely supports
+  the operation (see `InternalProvider` for the real Unix implementation).
+- `vfs/service.rs` — **the load-bearing piece.** `VfsService` checks
+  capabilities *before* dispatching to a provider and returns a
+  `VfsOutcome<T>` (`Ok` / `Blocked{reason,hint}` / `Degraded{value,caveat}`)
+  instead of a bare `Result`. Any new VFS operation should go through here,
+  not directly through a provider, or the capability system silently stops
+  applying to it.
+- `vfs/health.rs` — SAF permission health-check state machine
+  (`PermissionState`, `PermissionProbe` trait, `HealthMonitor`). The actual
+  Android-side probe isn't wired up yet — see the TODO in that file and in
+  `android/.../PermissionManager.kt`.
+- `jni_safe.rs` — MANDATORY safety layer for all JNI calls. Never call raw
+  `JNIEnv` methods outside this module's wrappers. Split into an
+  always-compiled pure half and an `android`-feature-gated half — see the
+  module doc comment for why.
+- `utils/sync_ext.rs` — `LockExt::lock_safe()`: use this instead of
+  `.lock().unwrap()` on any `Mutex`. See module doc for when NOT to use it
+  (mutexes protecting real invariants, not just data buffers).
+
+## Adding a new FsProvider (e.g. for Phase 2's SSH remote provider)
+
+1. Implement the `FsProvider` trait in a new file under `vfs/`.
+2. Only override `chmod`/`symlink`/`readlink` if the backend actually
+   supports them — otherwise inherit the trait defaults.
+3. Register it via `VfsService::mount_provider`, not by bypassing the
+   service and calling the provider directly.
+4. Write a fake/mock version implementing the same trait for use in
+   `vfs::service`'s test module — see `MockSafProvider` there for the
+   pattern. This is what makes capability-blocking behavior testable
+   without needing the real backend.
+5. See `.cursor/skills/add-vfs-provider.md` for a full worked example.
+
+## Panic policy
+
+No `.unwrap()`/`.expect()` in production code paths — this is enforced by
+`clippy::unwrap_used`/`clippy::expect_used` as CI hard-errors. Test modules
+are exempt via `#[allow(clippy::unwrap_used, clippy::expect_used)]` on the
+`mod tests` block — that's normal and expected, don't remove it or add
+production-style error handling to test assertions.
+
+If you're tempted to add `.unwrap()` to make something compile: stop, and
+either propagate a `VfsError`/`PtyError`/`TermiError` via `?`, or use
+`LockExt::lock_safe()` if it's a mutex lock. See
+`.cursor/skills/audit-unwraps.md` if you find a case that doesn't fit
+either pattern.

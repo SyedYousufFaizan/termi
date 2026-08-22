@@ -2,7 +2,7 @@
 //!
 //! Tracks virtual mount points that map Unix paths to SAF URIs.
 
-use crate::vfs_capabilities::{VfsCapabilities, VfsOperation};
+use crate::vfs::capabilities::{VfsCapabilities, VfsOperation};
 use crate::utils::error::{VfsError, VfsResult};
 use log::{info, warn};
 use std::collections::HashMap;
@@ -90,6 +90,13 @@ impl MountTable {
         let _ = table.mount(MountPoint::internal("/", &root));
         
         table
+    }
+
+    /// The real filesystem path backing the root ("/") mount. Useful for
+    /// diagnostics and for `vfs::health` to know which path is exempt from
+    /// SAF-style permission checks.
+    pub fn internal_root(&self) -> &Path {
+        &self.internal_root
     }
 
     /// Add a mount point
@@ -186,12 +193,13 @@ impl MountTable {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_mount_table() {
-        let mut table = MountTable::new("/data/data/com.terminal/files");
+        let table = MountTable::new("/data/data/com.terminal/files");
         
         // Root should be mounted
         assert!(table.find_mount(Path::new("/")).is_some());
@@ -222,7 +230,7 @@ mod tests {
         
         table.mount(MountPoint::saf("/mnt/sd", "content://...", "SD Card")).unwrap();
         
-        let (mount, relative) = table.resolve(Path::new("/mnt/sd/Documents/file.txt")).unwrap();
+        let (_mount, relative) = table.resolve(Path::new("/mnt/sd/Documents/file.txt")).unwrap();
         assert_eq!(relative, PathBuf::from("Documents/file.txt"));
     }
 

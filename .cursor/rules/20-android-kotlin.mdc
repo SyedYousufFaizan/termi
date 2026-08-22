@@ -1,0 +1,59 @@
+---
+description: Android/Kotlin conventions
+globs: android/**/*.kt
+---
+
+# Android / Kotlin Conventions
+
+## Important limitation for AI agents in this repo
+
+There is no Android SDK/NDK available in most sandboxed dev environments
+(including the one this codebase was originally scaffolded in). Kotlin
+code in this repo has generally **not been compiled or run** by an AI
+agent — only reviewed for logical consistency. Treat Kotlin changes as
+higher-risk than Rust changes until a human (or a properly configured
+Gradle environment) actually builds and runs them. Say so explicitly if
+you're generating Kotlin you haven't been able to compile.
+
+If Gradle/Android SDK *is* available in your environment, prefer to
+actually run:
+```bash
+cd android && ./gradlew testDebugUnitTest
+cd android && ./gradlew lint
+```
+before considering a Kotlin change complete.
+
+## JNI boundary
+
+All calls into the Rust core must go through the existing JNI method
+signatures — check `rust/src/android_jni.rs` for the authoritative list of
+exported functions before assuming a new one is needed. If a new Rust
+capability needs exposing to Kotlin (e.g. `VfsService`/`HealthMonitor`
+aren't wired up to JNI yet — see `docs/PHASE1_STATUS.md`), that JNI export
+needs to be added on the Rust side first, following the `jni_safe.rs`
+wrapper pattern, before Kotlin can call it.
+
+## Known scaffold TODOs (Phase 1, not yet built)
+
+- `PermissionManager.kt` — needs a `checkHealth()`-style method feeding
+  the Rust `PermissionProbe` trait (`rust/src/vfs/health.rs`). See the
+  TODO block already in that file.
+- `CommandToolbar.kt` — Esc/Home/End buttons added; still needs sticky-Ctrl
+  modifier and swipe-based history cycling. See the TODO block in that
+  file and `.cursor/skills/add-keyboard-toolbar-gesture.md`.
+- Package manager UI has no corresponding Kotlin screen yet — Rust-side
+  `package/manager.rs` and `package/repository.rs` are scaffolding only.
+
+Don't silently "complete" these without flagging that they're new
+functionality, since they touch the JNI boundary and permission model —
+get a look from whoever owns this repo before merging.
+
+## Style
+
+- Follow existing patterns in `SessionStateBanner.kt` for any new
+  dismissible-banner UI (used for both checkpoint/restore notices and,
+  eventually, permission health-check prompts) rather than inventing a new
+  banner component.
+- Composables take callbacks (`onCtrlC: () -> Unit`, etc.), not direct
+  references to `TerminalViewModel` — keep that separation so components
+  stay previewable/testable in isolation.

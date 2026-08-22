@@ -89,7 +89,63 @@ class PermissionManager(private val context: Context) {
             it.uri == treeUri && it.isReadPermission
         }
     }
-    
+
+    // ------------------------------------------------------------------
+    // TODO (Phase 1d — wires up to rust/src/vfs/health.rs::PermissionProbe)
+    //
+    // The Rust side already has the full state machine implemented and
+    // unit-tested (PermissionState::{Valid,Stale,Revoked,NotApplicable},
+    // HealthMonitor::scan/scan_needs_attention — see
+    // rust/src/vfs/health.rs). What's missing is the Kotlin-side
+    // implementation of the `PermissionProbe` trait that feeds it real
+    // data, since that trait boundary exists specifically so the state
+    // machine could be tested on host without a JVM. Concretely:
+    //
+    // 1. Add a JNI-exported function here (or in SafHelper.kt, wherever
+    //    the existing JNI bridge conventions live) that Rust can call per
+    //    mount, following the same safe-wrapper pattern already used
+    //    elsewhere — do NOT call raw JNI, go through jni_safe.rs.
+    //
+    // 2. Distinguish Stale vs Revoked (this is the part that needs real
+    //    logic, not just a boolean):
+    //      - `Revoked`: the URI is no longer in
+    //        `getPersistedPermissions()` at all — user turned it off in
+    //        Settings, or the storage provider app was uninstalled.
+    //      - `Stale`: the URI IS still in `getPersistedPermissions()`
+    //        (so `hasPermissionFor` returns true) but an actual operation
+    //        against it fails (e.g. `DocumentFile.fromTreeUri(...).exists()`
+    //        returns false, or a query throws). This is the "survived a
+    //        reboot but didn't fully come back" case and is usually
+    //        recoverable by re-taking the persistable permission without
+    //        showing the picker again.
+    //
+    // 3. Suggested shape:
+    //
+    //      fun checkHealth(treeUri: Uri): PermissionHealthResult {
+    //          val stillListed = hasPermissionFor(treeUri)
+    //          if (!stillListed) return PermissionHealthResult.REVOKED
+    //          return try {
+    //              val doc = DocumentFile.fromTreeUri(context, treeUri)
+    //              if (doc != null && doc.exists()) PermissionHealthResult.VALID
+    //              else PermissionHealthResult.STALE
+    //          } catch (e: SecurityException) {
+    //              PermissionHealthResult.STALE
+    //          }
+    //      }
+    //
+    //    ...then map PermissionHealthResult to the Rust PermissionState
+    //    enum values at the JNI boundary.
+    //
+    // 4. Call this from a startup health-check pass (e.g. in
+    //    TerminalApplication.onCreate or a splash/init screen) and surface
+    //    `MountHealth.suggested_action` as a dismissible banner — see
+    //    SessionStateBanner.kt for the existing banner pattern to reuse
+    //    rather than inventing a new UI component for this.
+    //
+    // See .cursor/skills/wire-permission-health-check.md for a fuller
+    // walkthrough including the JNI signature to use.
+    // ------------------------------------------------------------------
+
     companion object {
         const val REQUEST_CODE_STORAGE = 1001
         const val REQUEST_CODE_SAF_PICKER = 1002

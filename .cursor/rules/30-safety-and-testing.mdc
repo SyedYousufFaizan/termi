@@ -1,0 +1,50 @@
+---
+description: Safety and testing requirements — always apply
+alwaysApply: true
+---
+
+# Safety & Testing Requirements
+
+These apply to every change in this repo, not just Rust or Kotlin
+specifically.
+
+## Before saying something is "done" or "fixed"
+
+1. Actually run the relevant test suite (`cargo test` for Rust changes —
+   see `10-rust-core.mdc`). Don't infer test results from reading the code.
+2. If you added new logic with no test covering it, add one before
+   considering the task complete — this codebase's Phase 1d work
+   (`vfs/service.rs`, `vfs/health.rs`) was built test-first specifically so
+   the capability-blocking behavior is provable, not just plausible-looking.
+3. If a test can't be written because the code depends on a real Android
+   runtime (JNI calls, SAF, actual device permissions), say so explicitly
+   and explain what WOULD need to happen on-device to verify it — don't
+   present untestable code with the same confidence as tested code.
+
+## Debugging workflow
+
+When something fails (test failure, panic, unexpected behavior):
+
+1. Reproduce it with the smallest possible `cargo test <name>` or a
+   focused new test — don't guess from reading code.
+2. Check `docs/PHASE1_STATUS.md` first — if the failing area is listed as
+   "scaffolded, not implemented," the fix might be "implement this
+   properly" rather than "patch this bug."
+3. For panics: check whether it's a `.unwrap()`/`.expect()` that should
+   have been caught by `clippy::unwrap_used` — if clippy didn't catch it,
+   that's itself a bug in the lint coverage (e.g. missing
+   `#[warn(clippy::unwrap_used)]` somewhere) worth flagging.
+4. See `.cursor/skills/debug-rust-panic.md` for a structured checklist.
+
+## Never do this
+
+- Never add `.unwrap()`/`.expect()` to production code to "just get it
+  compiling" — see `10-rust-core.mdc` for the alternatives.
+- Never mark a Kotlin change as tested/verified if you don't have a
+  working Gradle/Android SDK environment to actually run it in — see
+  `20-android-kotlin.mdc`.
+- Never claim a feature is "complete" if it's gated behind
+  `#[cfg(feature = "android")]` and you've only run `cargo check`, not an
+  actual on-device test — check compiles, it doesn't verify behavior.
+- Never quietly widen scope into Phase 2/3 roadmap items while fixing a
+  Phase 1 bug — flag it as a separate suggestion instead.

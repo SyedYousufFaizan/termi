@@ -15,17 +15,22 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
+  # Fast, NDK-free path: the platform-independent core (PTY, terminal, VFS
+  # logic, capability system). Default features are intentionally empty
+  # (see rust/Cargo.toml), so this is exactly what `cargo test` does with
+  # no flags on a contributor's machine or in Cursor — no Android SDK/NDK
+  # needed. This is the job that should stay green on every commit.
+  core-tests:
     runs-on: ubuntu-latest
-    
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      
+
       - name: Cache cargo registry
         uses: actions/cache@v3
         with:
@@ -33,49 +38,86 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('rust/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-core-${{ hashFiles('rust/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
-      
+            ${{ runner.os }}-cargo-core-
+
       - name: Check formatting
         working-directory: rust
         run: cargo fmt --check
-      
-      - name: Run clippy
+
+      - name: Run clippy (unwrap/expect are enforced as hard errors here)
         working-directory: rust
-        run: cargo clippy -- -D warnings
-      
+        run: cargo clippy --all-targets -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+
       - name: Run tests
         working-directory: rust
         run: cargo test --verbose
-      
+
       - name: Build release
         working-directory: rust
         run: cargo build --release
 
-  # Android cross-compilation check
-  android-build:
+  # Verifies the JNI boundary (jni_safe's JNIEnv-dependent half,
+  # vfs/android_saf.rs, android_jni.rs) still type-checks and lints clean
+  # against the real `jni` crate. This can't *run* those code paths (no JVM
+  # here), but it catches signature drift immediately instead of it rotting
+  # silently until someone does a full NDK build.
+  android-feature-check:
     runs-on: ubuntu-latest
-    
+
     steps:
       - uses: actions/checkout@v4
-      
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-android-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-android-
+
+      - name: Type-check android feature
+        working-directory: rust
+        run: cargo check --features android --all-targets
+
+      - name: Clippy android feature
+        working-directory: rust
+        run: cargo clippy --features android -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+
+  # Real cross-compilation to an actual Android target via the NDK. This is
+  # the closest this CI gets to "does it work on a phone" without a device
+  # farm. Note --features android is now required explicitly since default
+  # features are empty.
+  android-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
-      
+
       - name: Install cargo-ndk
         run: cargo install cargo-ndk
-      
+
       - name: Setup Android NDK
         uses: android-actions/setup-android@v3
         id: setup-android
         with:
           packages: 'ndk;25.2.9519653'
-      
+
       - name: Build for Android ARM64
         working-directory: rust
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-android.outputs.ndk-path }}
-        run: cargo ndk -t arm64-v8a build --release
+        run: cargo ndk -t arm64-v8a build --release --features android

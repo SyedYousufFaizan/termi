@@ -2,6 +2,12 @@
 
 This document tracks development progress and upcoming milestones.
 
+> **Note:** For the current, verified ground-truth status of the Phase 1
+> safety cleanup and VFS capability enforcement work, see
+> [PHASE1_STATUS.md](PHASE1_STATUS.md) — it's updated per-pass with what
+> was actually tested, not just planned. This file describes the overall
+> phased plan; PHASE1_STATUS.md describes what's real right now.
+
 ## Project Status
 
 | Phase | Status | Progress |
@@ -24,7 +30,7 @@ This document tracks development progress and upcoming milestones.
 | Task | Status | File |
 |------|--------|------|
 | Safe JNI Wrapper Module | ✅ | `rust/src/jni_safe.rs` |
-| VFS Capability System | ✅ | `rust/src/vfs_capabilities.rs` |
+| VFS Capability System | ✅ | `rust/src/vfs/capabilities.rs` (moved from crate root in Phase 1 cleanup) |
 | Session State Management | ✅ | `rust/src/session_state.rs` |
 | Error Types | ✅ | `rust/src/utils/error.rs` |
 | User-Facing Limitations Doc | ✅ | `docs/LIMITATIONS.md` |

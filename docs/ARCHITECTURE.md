@@ -44,9 +44,11 @@ This document describes the technical architecture of the Next-Gen Android Termi
 ```
 rust/src/
 ├── lib.rs              # Library entry point, exports
-├── jni_safe.rs         # Safe JNI wrappers (CRITICAL)
+├── jni_safe.rs         # Safe JNI wrappers (CRITICAL) — split into a pure,
+│                       # always-compiled half and a `#[cfg(feature =
+│                       # "android")]`-gated half as of Phase 1b, so this
+│                       # crate builds/tests without any Android tooling
 ├── session_state.rs    # Session lifecycle management
-├── vfs_capabilities.rs # Filesystem capability checking
 ├── pty/
 │   ├── mod.rs          # PTY module exports
 │   ├── core.rs         # PtySession - main PTY interface
@@ -58,14 +60,24 @@ rust/src/
 │   └── renderer.rs     # Render output for UI
 ├── vfs/
 │   ├── mod.rs          # VFS module exports
+│   ├── capabilities.rs # Filesystem capability checking (moved here from
+│   │                   # crate root `vfs_capabilities.rs` in Phase 1 cleanup)
 │   ├── mount.rs        # Virtual mount table
-│   ├── provider.rs     # Filesystem provider trait
+│   ├── provider.rs     # Filesystem provider trait (chmod/symlink/readlink
+│   │                   # added in Phase 1d, defaulting to unsupported)
+│   ├── service.rs      # NEW (Phase 1d): VfsService — enforces capabilities
+│   │                   # before dispatching to a provider, returns VfsOutcome
+│   ├── health.rs       # NEW (Phase 1d): SAF permission health-check state
+│   │                   # machine (Valid/Stale/Revoked)
 │   ├── cache.rs        # Metadata caching
-│   ├── android_saf.rs  # Android SAF implementation
-│   └── ios_provider.rs # iOS placeholder
+│   ├── android_saf.rs  # Android SAF implementation (still a stub — see
+│   │                   # docs/PHASE1_STATUS.md)
+│   └── ios_provider.rs # iOS placeholder — not resourced, see file header
 ├── utils/
 │   ├── mod.rs          # Utils module exports
 │   ├── error.rs        # Unified error types
+│   ├── sync_ext.rs     # NEW (Phase 1b): LockExt::lock_safe() — poison-safe
+│   │                   # mutex locking, replaces .lock().unwrap()
 │   └── logger.rs       # Logging setup
 └── package/
     ├── mod.rs          # Package manager (future)
@@ -130,7 +142,7 @@ let result = safe_call_bool_method(env, obj, "exists", "(Ljava/lang/String;)Z", 
 let result = env.call_method(obj, "exists", ...); // DANGEROUS!
 ```
 
-### 2. VFS Capability System (`vfs_capabilities.rs`)
+### 2. VFS Capability System (`vfs/capabilities.rs` + `vfs/service.rs`)
 
 Tracks what operations are supported on each filesystem:
 
@@ -141,6 +153,13 @@ Tracks what operations are supported on each filesystem:
 | symlink | ✅ | ❌ |
 | inotify | ✅ | ❌ |
 | atomic rename | ✅ | ⚠️ |
+
+As of Phase 1d, this table is actually enforced, not just documented:
+`VfsService` (in `vfs/service.rs`) checks capabilities before dispatching
+to a provider and returns a `VfsOutcome` carrying a user-facing hint for
+blocked operations (e.g. "move this project to internal storage"). See
+`docs/PHASE1_STATUS.md` and `.cursor/rules/40-vfs-saf-architecture.mdc`
+for the full design.
 
 ```rust
 // Always check before operation

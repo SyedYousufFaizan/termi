@@ -5,6 +5,7 @@
 
 use crate::session_state::{SessionState, TerminalState};
 use crate::utils::error::{PtyError, PtyResult};
+use crate::utils::sync_ext::LockExt;
 use log::{debug, error, info, warn};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
@@ -198,10 +199,17 @@ impl PtySession {
 
         let handle = thread::spawn(move || {
             let mut reader = reader;
-            let mut local_buf = shared_buf_clone.lock().unwrap();
+            // Safety cleanup (Phase 1b): these were `.lock().unwrap()`. A
+            // poisoned mutex here (from a panic on some other reader thread
+            // in a prior call) would previously panic *this* thread too,
+            // which — because this closure runs on a detached
+            // `thread::spawn` — could silently wedge the session instead of
+            // surfacing a clean PtyError. `lock_safe()` recovers instead;
+            // see utils::sync_ext for why that's safe for plain data buffers.
+            let mut local_buf = shared_buf_clone.lock_safe();
             match reader.read(&mut local_buf) {
-                Ok(n) => *shared_result_clone.lock().unwrap() = Some(Ok(n)),
-                Err(e) => *shared_result_clone.lock().unwrap() = Some(Err(e.to_string())),
+                Ok(n) => *shared_result_clone.lock_safe() = Some(Ok(n)),
+                Err(e) => *shared_result_clone.lock_safe() = Some(Err(e.to_string())),
             }
             reader
         });
@@ -210,7 +218,7 @@ impl PtySession {
         thread::sleep(timeout);
         
         // Check if we got a result
-        let result = shared_result.lock().unwrap().take();
+        let result = shared_result.lock_safe().take();
         
         // Try to get reader back
         match handle.join() {
@@ -225,7 +233,7 @@ impl PtySession {
 
         match result {
             Some(Ok(n)) => {
-                let shared = shared_buf.lock().unwrap();
+                let shared = shared_buf.lock_safe();
                 buf[..n].copy_from_slice(&shared[..n]);
                 Ok(n)
             }
@@ -411,6 +419,7 @@ impl Drop for PtySession {
 unsafe impl Send for PtySession {}
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

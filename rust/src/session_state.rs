@@ -382,6 +382,7 @@ impl std::fmt::Display for CheckpointError {
 impl std::error::Error for CheckpointError {}
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use std::env;

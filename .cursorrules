@@ -67,3 +67,29 @@ This is a cross-platform terminal emulator with:
 - Use safe patterns from jni_safe.rs
 - Explain Android/iOS platform differences
 - Point out performance implications
+
+---
+
+## Phase 1 update (see .cursor/rules/*.mdc and .cursor/skills/*.md for detail)
+
+This repo now also has structured rules under `.cursor/rules/` (project
+overview, Rust conventions, Android conventions, safety/testing policy,
+and VFS/SAF architecture) and reusable playbooks under `.cursor/skills/`.
+If your Cursor version supports the newer `.cursor/rules/*.mdc` format,
+read those directly — they're more current than this file for anything
+Phase 1 related. Key changes since this file was originally written:
+
+- **Test commands**: `cd rust && cargo test` now runs with NO flags and
+  needs no Android SDK/NDK (default Cargo features are intentionally
+  empty). Use `cargo check --features android --all-targets` to verify
+  the JNI boundary type-checks.
+- **`clippy::unwrap_used`/`clippy::expect_used` are enforced in CI as hard
+  errors**, not just a style preference — see
+  `.cursor/rules/30-safety-and-testing.mdc`.
+- **VFS capability enforcement is now real**, not just documented: see
+  `rust/src/vfs/service.rs` (`VfsService`, the thing that actually checks
+  capabilities before calling a provider) and `rust/src/vfs/health.rs`
+  (SAF permission staleness/revocation state machine). Route all file
+  operations through `VfsService`, not directly through a `FsProvider`.
+- `vfs_capabilities.rs` moved from the crate root to `rust/src/vfs/capabilities.rs`.
+- Check `docs/PHASE1_STATUS.md` before assuming something is implemented.

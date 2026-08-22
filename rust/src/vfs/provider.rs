@@ -101,6 +101,49 @@ pub trait FsProvider: Send + Sync {
     
     /// Check if path is a directory
     fn is_dir(&self, path: &Path) -> bool;
+
+    // ------------------------------------------------------------------
+    // Phase 1d additions: capability-gated operations.
+    //
+    // These default to "not supported" rather than being left off the
+    // trait entirely. Before this change, `SafProvider` simply had no
+    // chmod/symlink methods at all — which meant the capability system in
+    // `vfs::capabilities` (which *knows* SAF can't chmod) had no actual
+    // operation to block. The capability check and the operation now live
+    // on the same trait, so `VfsService` (see `vfs::service`) can enforce
+    // one against the other instead of the two systems silently drifting
+    // apart. `InternalProvider` overrides these with real implementations;
+    // `SafProvider` intentionally does not override them, since SAF has no
+    // equivalent primitive — the inherited default IS the correct behavior.
+    // ------------------------------------------------------------------
+
+    /// Change file permissions. Most providers don't support this — the
+    /// default returns `OperationNotSupported`. Only providers backed by a
+    /// real Unix filesystem (`InternalProvider`) should override this.
+    fn chmod(&self, path: &Path, _mode: u32) -> VfsResult<()> {
+        Err(crate::utils::error::unsupported_operation(
+            crate::vfs::capabilities::VfsOperation::Chmod,
+            &path.to_string_lossy(),
+        ))
+    }
+
+    /// Create a symbolic link at `link` pointing to `target`. Default:
+    /// not supported (true for SAF and FAT-backed storage).
+    fn symlink(&self, target: &Path, link: &Path) -> VfsResult<()> {
+        let _ = target;
+        Err(crate::utils::error::unsupported_operation(
+            crate::vfs::capabilities::VfsOperation::Symlink,
+            &link.to_string_lossy(),
+        ))
+    }
+
+    /// Read the target of a symbolic link. Default: not supported.
+    fn readlink(&self, path: &Path) -> VfsResult<std::path::PathBuf> {
+        Err(crate::utils::error::unsupported_operation(
+            crate::vfs::capabilities::VfsOperation::Symlink,
+            &path.to_string_lossy(),
+        ))
+    }
 }
 
 /// Internal storage provider (direct filesystem access)
@@ -225,9 +268,56 @@ impl FsProvider for InternalProvider {
     fn is_dir(&self, path: &Path) -> bool {
         self.resolve_path(path).is_dir()
     }
+
+    fn chmod(&self, path: &Path, mode: u32) -> VfsResult<()> {
+        // Real chmod, since internal storage is a genuine Unix filesystem.
+        // This is exactly the operation that's a no-op-or-error everywhere
+        // else in the VFS layer, which is the whole reason the capability
+        // system exists — see vfs::capabilities and vfs::service.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let full_path = self.resolve_path(path);
+            let perms = std::fs::Permissions::from_mode(mode);
+            std::fs::set_permissions(&full_path, perms)
+                .map_err(|e| VfsError::PermissionDenied(format!("{}: {}", full_path.display(), e)))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = mode;
+            Err(crate::utils::error::unsupported_operation(
+                crate::vfs::capabilities::VfsOperation::Chmod,
+                &path.to_string_lossy(),
+            ))
+        }
+    }
+
+    fn symlink(&self, target: &Path, link: &Path) -> VfsResult<()> {
+        #[cfg(unix)]
+        {
+            let full_link = self.resolve_path(link);
+            std::os::unix::fs::symlink(target, &full_link)
+                .map_err(|e| VfsError::PermissionDenied(format!("{}: {}", full_link.display(), e)))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = target;
+            Err(crate::utils::error::unsupported_operation(
+                crate::vfs::capabilities::VfsOperation::Symlink,
+                &link.to_string_lossy(),
+            ))
+        }
+    }
+
+    fn readlink(&self, path: &Path) -> VfsResult<std::path::PathBuf> {
+        let full_path = self.resolve_path(path);
+        std::fs::read_link(&full_path)
+            .map_err(|e| VfsError::NotFound(format!("{}: {}", full_path.display(), e)))
+    }
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use std::env;
@@ -260,5 +350,67 @@ mod tests {
 
         // Cleanup
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_internal_provider_chmod_and_symlink() {
+        let temp_dir = env::temp_dir().join("vfs_test_chmod_symlink");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let provider = InternalProvider::new(&temp_dir);
+        provider.write_file(Path::new("real.txt"), b"data").unwrap();
+
+        // chmod should actually change permissions on internal storage —
+        // this is the exact operation that's a no-op everywhere else.
+        provider.chmod(Path::new("real.txt"), 0o600).unwrap();
+        let meta = std::fs::metadata(temp_dir.join("real.txt")).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+
+        // symlink + readlink round-trip
+        provider.symlink(Path::new("real.txt"), Path::new("link.txt")).unwrap();
+        let target = provider.readlink(Path::new("link.txt")).unwrap();
+        assert_eq!(target, Path::new("real.txt"));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// A minimal fake provider used to prove the *default* trait methods
+    /// (chmod/symlink/readlink) return `OperationNotSupported` for any
+    /// provider that doesn't override them — this is the behavior SAF
+    /// relies on without writing any code of its own for it.
+    struct BareMinimumProvider;
+
+    impl FsProvider for BareMinimumProvider {
+        fn read_file(&self, _path: &Path) -> VfsResult<Vec<u8>> { Ok(vec![]) }
+        fn write_file(&self, _path: &Path, _contents: &[u8]) -> VfsResult<()> { Ok(()) }
+        fn metadata(&self, _path: &Path) -> VfsResult<FileMetadata> {
+            Ok(FileMetadata::file("x", "x", 0))
+        }
+        fn list_dir(&self, _path: &Path) -> VfsResult<Vec<DirEntry>> { Ok(vec![]) }
+        fn create_dir(&self, _path: &Path) -> VfsResult<()> { Ok(()) }
+        fn delete(&self, _path: &Path) -> VfsResult<()> { Ok(()) }
+        fn rename(&self, _from: &Path, _to: &Path) -> VfsResult<()> { Ok(()) }
+        fn exists(&self, _path: &Path) -> bool { true }
+        fn is_dir(&self, _path: &Path) -> bool { false }
+    }
+
+    #[test]
+    fn test_default_chmod_symlink_are_unsupported() {
+        let provider = BareMinimumProvider;
+        assert!(matches!(
+            provider.chmod(Path::new("/x"), 0o644),
+            Err(VfsError::OperationNotSupported { .. })
+        ));
+        assert!(matches!(
+            provider.symlink(Path::new("/a"), Path::new("/b")),
+            Err(VfsError::OperationNotSupported { .. })
+        ));
+        assert!(matches!(
+            provider.readlink(Path::new("/b")),
+            Err(VfsError::OperationNotSupported { .. })
+        ));
     }
 }

@@ -1,0 +1,69 @@
+---
+description: VFS/SAF capability system architecture — the core product moat
+globs: rust/src/vfs/**/*.rs
+---
+
+# VFS / SAF Capability System
+
+This is the actual product differentiator (see `docs/PHASE1_STATUS.md` and
+the project's strategic report) — treat changes here with more care than
+elsewhere in the codebase.
+
+## The three-layer design
+
+1. **`capabilities.rs`** answers "is operation X supported on filesystem
+   type Y, and why/why not" as pure data — no I/O, no provider awareness.
+2. **`provider.rs`** answers "how do I actually perform operation X" for a
+   specific backend. Its trait defaults assume an operation is
+   unsupported unless a provider explicitly overrides it — this means a
+   new provider gets correct capability-blocking behavior for free just by
+   NOT implementing methods it can't support, rather than needing to
+   duplicate logic already captured in `capabilities.rs`.
+3. **`service.rs`** is what actually enforces layer 1 against layer 2:
+   `VfsService` checks the capability *before* calling the provider method,
+   and translates the outcome into a `VfsOutcome` carrying a user-facing
+   `hint` string. **Any code path that touches a file must go through
+   `VfsService`, not directly through a `FsProvider` implementation** — if
+   you find yourself calling `provider.chmod()` directly from anywhere
+   outside `service.rs`, that's a bug: the capability check gets bypassed.
+
+## The `VfsOutcome` contract
+
+- `Ok(T)` — succeeded cleanly, no caveats.
+- `Blocked { operation, reason, hint }` — not attempted; capability check
+  failed. `hint` should be `Some(...)` for anything a user could plausibly
+  fix (move to internal storage, re-grant permission) and `None` only for
+  genuine hard failures.
+- `Degraded { value, caveat }` — attempted AND succeeded, but with a
+  caveat worth surfacing (e.g. non-atomic rename on SAF). **Never collapse
+  this into `Blocked`** — the operation worked; lying about that would be
+  worse than not warning at all.
+
+When adding a new operation to `VfsService`, decide up front which of
+these three outcomes each supported filesystem type produces, and write a
+test for each case — see `vfs/service.rs`'s test module for the pattern
+(one test per outcome type, per relevant provider).
+
+## Testing without a real SAF/JNI environment
+
+`vfs/service.rs`'s test module includes `MockSafProvider`, an in-memory
+`FsProvider` that deliberately does NOT override `chmod`/`symlink` —
+this proves the trait defaults produce correct `OperationNotSupported`
+behavior, which is exactly what the real `SafProvider`
+(`vfs/android_saf.rs`) inherits too. Use this pattern for any new
+capability-gated behavior: you don't need real SAF to test the *policy*,
+only the actual JNI plumbing needs a device.
+
+## Permission health vs. capability — don't conflate them
+
+- **Capability** (`capabilities.rs`/`service.rs`): "this filesystem type
+  fundamentally cannot do X" (e.g. SAF has no chmod primitive at all).
+  This never changes at runtime.
+- **Permission health** (`health.rs`): "this specific mount's access grant
+  has gone stale/revoked" — a transient, recoverable state, unrelated to
+  what the filesystem type supports. A perfectly capable SAF mount can
+  still have a revoked permission.
+
+Don't add permission-state logic to `capabilities.rs`, and don't add
+capability logic to `health.rs` — they answer different questions and are
+tested independently for that reason.

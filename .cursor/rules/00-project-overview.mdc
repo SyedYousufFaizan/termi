@@ -1,0 +1,46 @@
+---
+description: Termi project overview — always apply
+alwaysApply: true
+---
+
+# Termi — Project Overview
+
+Termi is a pre-alpha Android terminal emulator: a Rust core (PTY, ANSI
+parsing, VFS/SAF bridge) driving a Jetpack Compose UI over JNI. The
+differentiated bet is a **capability-aware virtual filesystem** that tells
+users upfront what will and won't work on Android's Storage Access
+Framework (chmod, symlinks, etc.), instead of silently failing the way
+Termux does.
+
+## Repo layout
+
+- `rust/` — the core engine. `cargo build`/`cargo test` with **no flags**
+  builds and tests the platform-independent logic (PTY, terminal, VFS,
+  capability system) on a plain host toolchain. No Android SDK/NDK needed
+  for this. Use `--features android` to additionally compile the JNI
+  boundary against the real `jni` crate (type-checks on host; only truly
+  *runs* on-device).
+- `android/` — Kotlin/Compose app. Calls into the Rust core via JNI.
+- `docs/` — architecture, roadmap, limitations, and `PHASE1_STATUS.md`
+  (what's actually implemented vs. scaffolded — read this before assuming
+  a feature exists).
+- `packages/` — package manager scaffolding (mostly unbuilt, see status doc).
+
+## Ground truth over vibes
+
+Before claiming a feature is done, working, or tested, check
+`docs/PHASE1_STATUS.md` and run the actual tests (see
+`10-rust-core.mdc` / the `run-tests-and-debug` skill). This project has a
+documented history of README claims running ahead of actual code — don't
+repeat that pattern in commit messages, docstrings, or chat responses.
+
+## Current priority order (Phase 1)
+
+1. Safety cleanup (`clippy::unwrap_used` enforced — see `30-safety-and-testing.mdc`)
+2. VFS/SAF capability system (`rust/src/vfs/` — the actual product)
+3. Keyboard UX (`android/.../CommandToolbar.kt` — cheap, high-visibility)
+4. Package manager, session polish
+
+Don't build Phase 2 (remote/SSH) or Phase 3 (GUI Linux apps) features
+unless explicitly asked — see `docs/ROADMAP.md` for why these are
+deliberately sequenced later.

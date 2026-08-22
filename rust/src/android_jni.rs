@@ -17,7 +17,7 @@ use crate::jni_safe::{
 };
 use crate::pty::PtySession;
 use crate::session_state::{CheckpointManager, SessionState};
-use crate::vfs_capabilities::{VfsCapabilities, VfsOperation};
+use crate::vfs::capabilities::{VfsCapabilities, VfsOperation};
 
 use jni::objects::{JByteArray, JClass, JString};
 use jni::sys::{jboolean, jint, jlong};

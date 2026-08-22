@@ -8,11 +8,21 @@
 
 A modern terminal emulator for Android that solves real problems: external storage access, background execution, and poor UX.
 
-![Status](https://img.shields.io/badge/status-Week%200%20Complete-green)
+![Status](https://img.shields.io/badge/status-alpha-red)
 ![Platform](https://img.shields.io/badge/platform-Android%2012%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-orange)
 
-## What This Solves
+> **Status: Alpha.** The core terminal (PTY/ANSI/screen) is functional.
+> The SAF-VFS bridge — the actual differentiator described below — has its
+> capability-checking *policy* implemented and tested (see
+> [`docs/PHASE1_STATUS.md`](docs/PHASE1_STATUS.md)), but the real
+> Android-side SAF I/O is still a stub. The package manager is
+> unimplemented. Treat everything in "What This Solves" below as the
+> target design, not a completed feature list — `PHASE1_STATUS.md` is the
+> ground-truth doc for what's actually built vs. scaffolded at any given
+> time.
+
+## What This Solves (target — see status doc for what's actually built)
 
 | Problem | Existing Pain | Our Solution |
 |---------|---------------|--------------|
@@ -89,6 +99,23 @@ See [Development Guide](docs/DEVELOPMENT.md) for detailed setup.
 | [API.md](docs/API.md) | Rust API reference |
 | [LIMITATIONS.md](docs/LIMITATIONS.md) | Known constraints and workarounds |
 | [ROADMAP.md](docs/ROADMAP.md) | Development phases and progress |
+| [**PHASE1_STATUS.md**](docs/PHASE1_STATUS.md) | **Ground truth: what's actually implemented vs. scaffolded right now** |
+
+## Developing with Cursor
+
+This repo ships with `.cursor/rules/*.mdc` and `.cursor/skills/*.md` —
+Cursor (or any agent reading those files) should pick up project
+conventions, the safety/testing policy, and worked-example playbooks
+(adding a VFS provider, debugging a panic, wiring the permission
+health-check) automatically. Start here regardless of tooling:
+
+```bash
+cd rust
+cargo test                                    # fast, no Android SDK/NDK needed
+cargo check --features android --all-targets  # type-checks the JNI boundary
+```
+
+See `.cursor/rules/00-project-overview.mdc` for the full picture.
 
 ##  Project Status
 
@@ -96,7 +123,9 @@ See [Development Guide](docs/DEVELOPMENT.md) for detailed setup.
 |-------|--------|---------|
 | Week 0: Safety Foundation | ✅ Complete | JNI safety, VFS capabilities, session state |
 | Month 1: Core Terminal | 🔄 In Progress | PTY, UI, basic commands |
-| Month 2: SAF Integration | ⏳ Pending | External storage access |
+| Phase 1b: Safety cleanup | ✅ Complete | Unwrap audit, poison-safe locks, clippy enforcement — see [PHASE1_STATUS.md](docs/PHASE1_STATUS.md) |
+| Phase 1d: VFS capability enforcement | 🔄 Policy layer done, SAF I/O still stubbed | `VfsService`, `HealthMonitor` — see [PHASE1_STATUS.md](docs/PHASE1_STATUS.md) |
+| Month 2: SAF Integration | ⏳ Pending | Real Android-side SAF I/O |
 | Month 3: Polish & Packages | ⏳ Pending | File explorer, packages |
 
 ##  Important Limitations

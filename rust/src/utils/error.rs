@@ -6,7 +6,7 @@
 use thiserror::Error;
 use crate::jni_safe::JniErrorCode;
 use crate::session_state::CheckpointError;
-use crate::vfs_capabilities::VfsOperation;
+use crate::vfs::capabilities::VfsOperation;
 
 /// Top-level error type for the terminal core
 #[derive(Error, Debug)]
@@ -233,6 +233,7 @@ pub fn unsupported_operation(op: VfsOperation, path: &str) -> VfsError {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

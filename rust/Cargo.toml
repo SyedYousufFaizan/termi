@@ -38,7 +38,17 @@ thiserror = "1.0"
 anyhow = "1.0"
 
 [features]
-default = ["android"]
+# Default is intentionally empty. `cargo build` / `cargo test` with no flags
+# compiles and tests the platform-independent core (PTY, terminal, VFS logic,
+# capability system) on a plain host toolchain — no Android NDK, no `jni`
+# crate, no JVM required. This is the fast loop for local dev / Cursor.
+#
+# Use `--features android` to additionally compile the JNI boundary
+# (jni_safe's JNIEnv-dependent half, android_jni.rs, vfs/android_saf.rs).
+# That code can only be meaningfully *run* on-device, but `cargo check
+# --features android` verifies it still type-checks against the real `jni`
+# crate so a signature drift doesn't rot silently until someone builds an APK.
+default = []
 android = ["jni"]
 ios = []
 

@@ -380,6 +380,7 @@ fn get_param(params: &Params, index: usize, default: u16) -> u16 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

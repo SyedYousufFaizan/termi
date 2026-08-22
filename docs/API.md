@@ -208,7 +208,9 @@ impl CheckpointManager {
 
 ## VFS Capabilities
 
-**Module:** `terminal_core::vfs_capabilities`
+**Module:** `terminal_core::vfs::capabilities` (moved from the crate-root
+`vfs_capabilities` module in the Phase 1 repo cleanup — see
+[PHASE1_STATUS.md](PHASE1_STATUS.md))
 
 ### VfsOperation Enum
 
@@ -551,8 +553,88 @@ pub trait FsProvider: Send + Sync {
     fn rename(&self, from: &Path, to: &Path) -> VfsResult<()>;
     fn exists(&self, path: &Path) -> bool;
     fn is_dir(&self, path: &Path) -> bool;
+
+    // Added in Phase 1d. All three default to `Err(OperationNotSupported)`
+    // — only override them if the backend genuinely supports the
+    // operation (InternalProvider overrides all three with real Unix
+    // syscalls; SafProvider intentionally overrides none of them).
+    fn chmod(&self, path: &Path, mode: u32) -> VfsResult<()> { /* default: unsupported */ }
+    fn symlink(&self, target: &Path, link: &Path) -> VfsResult<()> { /* default: unsupported */ }
+    fn readlink(&self, path: &Path) -> VfsResult<PathBuf> { /* default: unsupported */ }
 }
 ```
+
+### VfsService (new in Phase 1d)
+
+**Module:** `terminal_core::vfs::service`
+
+The facade that enforces the capability system before dispatching to a
+provider. This is what every real filesystem operation should go
+through — calling a `FsProvider` method directly bypasses the capability
+check entirely.
+
+```rust
+pub enum VfsOutcome<T> {
+    Ok(T),
+    Blocked { operation: VfsOperation, reason: String, hint: Option<String> },
+    Degraded { value: T, caveat: String },
+}
+
+pub struct VfsService { /* ... */ }
+
+impl VfsService {
+    pub fn new(internal_root: impl Into<PathBuf>, internal_provider: Arc<dyn FsProvider>) -> Self;
+    pub fn mount_provider(&mut self, mount: MountPoint, provider: Arc<dyn FsProvider>) -> VfsResult<()>;
+    pub fn unmount(&mut self, virtual_path: &Path) -> VfsResult<()>;
+    pub fn mounts(&self) -> &MountTable;
+
+    pub fn read_file(&self, path: &Path) -> VfsOutcome<Vec<u8>>;
+    pub fn write_file(&self, path: &Path, contents: &[u8]) -> VfsOutcome<()>;
+    pub fn metadata(&self, path: &Path) -> VfsOutcome<FileMetadata>;
+    pub fn list_dir(&self, path: &Path) -> VfsOutcome<Vec<DirEntry>>;
+    pub fn create_dir(&self, path: &Path) -> VfsOutcome<()>;
+    pub fn delete(&self, path: &Path) -> VfsOutcome<()>;
+    pub fn chmod(&self, path: &Path, mode: u32) -> VfsOutcome<()>;
+    pub fn symlink(&self, target: &Path, link: &Path) -> VfsOutcome<()>;
+    pub fn readlink(&self, path: &Path) -> VfsOutcome<PathBuf>;
+    pub fn rename(&self, from: &Path, to: &Path) -> VfsOutcome<()>;
+}
+```
+
+`VfsOutcome::Blocked.hint` is intended to be rendered directly as an
+inline terminal warning (e.g. "Move this project to internal storage to
+use this feature") rather than a bare error — see
+`.cursor/rules/40-vfs-saf-architecture.mdc` for the design rationale.
+
+### HealthMonitor (new in Phase 1d)
+
+**Module:** `terminal_core::vfs::health`
+
+SAF permission staleness/revocation detection, independent of the
+capability system above (capability = "can this filesystem type do X at
+all"; health = "has this specific mount's access grant gone bad").
+
+```rust
+pub enum PermissionState { Valid, Stale, Revoked, NotApplicable }
+
+pub trait PermissionProbe: Send + Sync {
+    fn check(&self, mount: &MountPoint) -> PermissionState;
+}
+
+pub struct HealthMonitor { /* ... */ }
+
+impl HealthMonitor {
+    pub fn new(probe: Box<dyn PermissionProbe>) -> Self;
+    pub fn always_valid() -> Self;
+    pub fn scan(&self, table: &MountTable) -> Vec<MountHealth>;
+    pub fn scan_needs_attention(&self, table: &MountTable) -> Vec<MountHealth>;
+}
+```
+
+The real Android-backed `PermissionProbe` implementation (JNI calls into
+`ContentResolver`) is not yet written — see
+`.cursor/skills/wire-permission-health-check.md`. Everything above is
+tested on host with a `FakeProbe` standing in for the real JNI call.
 
 ### MetadataCache
 

@@ -12,6 +12,32 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+// TODO (Phase 1c — highest-ROI, lowest-effort item on the roadmap):
+//
+// This toolbar covers Ctrl+C/D/Z, Tab, and up/down history — a solid
+// start, but the most-requested keys from Termux-refugee feedback are
+// still missing: Esc, Home, End, Left/Right, and a *sticky Ctrl modifier*
+// (tap Ctrl once, it stays "armed" until the next keypress, so `Ctrl+R`
+// for reverse-search doesn't need a dedicated button per letter).
+//
+// Concretely, still needed:
+//   1. Esc, Home, End, ←, → buttons (same ToolbarButton pattern below).
+//   2. A toggleable Ctrl "sticky" state: track `var ctrlArmed by
+//      remember { mutableStateOf(false) }` at the call site (likely
+//      TerminalScreen.kt), render the Ctrl button as visually "pressed"
+//      when armed, and have the *next* character typed get ORed with the
+//      Ctrl modifier (send the appropriate control byte) instead of
+//      requiring a fixed Ctrl+X button per letter.
+//   3. Command history cycling via swipe gesture on the toolbar itself
+//      (swipe left/right = history back/forward) as an alternative to
+//      tapping ↑/↓ repeatedly — use `Modifier.pointerInput` with
+//      `detectHorizontalDragGestures`, see
+//      .cursor/skills/add-keyboard-toolbar-gesture.md for a worked example
+//      of wiring a gesture to TerminalViewModel's command history.
+//
+// None of this needs Rust changes — it's pure Compose UI work against the
+// existing onCtrlC-style callback pattern.
+
 /**
  * Toolbar with quick command buttons (Ctrl+C, Tab, etc.)
  */
@@ -23,6 +49,9 @@ fun CommandToolbar(
     onTab: () -> Unit,
     onArrowUp: () -> Unit,
     onArrowDown: () -> Unit,
+    onEsc: () -> Unit = {},   // TODO: wire to \u001B, add button below
+    onHome: () -> Unit = {},  // TODO: wire to \u001B[H
+    onEnd: () -> Unit = {},   // TODO: wire to \u001B[F
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -39,7 +68,10 @@ fun CommandToolbar(
         ToolbarButton(text = "Tab", onClick = onTab)
         ToolbarButton(text = "↑", onClick = onArrowUp)
         ToolbarButton(text = "↓", onClick = onArrowDown)
-        
+        ToolbarButton(text = "Esc", onClick = onEsc)
+        ToolbarButton(text = "Home", onClick = onHome)
+        ToolbarButton(text = "End", onClick = onEnd)
+
         Spacer(modifier = Modifier.width(8.dp))
         
         // Common keys
@@ -87,7 +119,10 @@ fun ExtendedCommandToolbar(
             onCtrlZ = { onCommand("\u001A") },  // SUB
             onTab = { onCommand("\t") },
             onArrowUp = { onCommand("\u001B[A") },
-            onArrowDown = { onCommand("\u001B[B") }
+            onArrowDown = { onCommand("\u001B[B") },
+            onEsc = { onCommand("\u001B") },
+            onHome = { onCommand("\u001B[H") },
+            onEnd = { onCommand("\u001B[F") }
         )
         
         // Quick commands row
