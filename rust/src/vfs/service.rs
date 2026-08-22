@@ -73,9 +73,9 @@ impl<T> VfsOutcome<T> {
         match self {
             VfsOutcome::Ok(v) => Ok(v),
             VfsOutcome::Degraded { value, .. } => Ok(value),
-            VfsOutcome::Blocked { operation, reason, .. } => {
-                Err(VfsError::OperationNotSupported { operation, reason })
-            }
+            VfsOutcome::Blocked {
+                operation, reason, ..
+            } => Err(VfsError::OperationNotSupported { operation, reason }),
         }
     }
 
@@ -135,7 +135,10 @@ impl VfsService {
         &self.mounts
     }
 
-    fn resolve_provider(&self, virtual_path: &Path) -> VfsResult<(&MountPoint, Arc<dyn FsProvider>, PathBuf)> {
+    fn resolve_provider(
+        &self,
+        virtual_path: &Path,
+    ) -> VfsResult<(&MountPoint, Arc<dyn FsProvider>, PathBuf)> {
         let (mount, relative) = self.mounts.resolve(virtual_path)?;
         let provider = self
             .providers
@@ -205,14 +208,16 @@ impl VfsService {
                     hint: None,
                 },
             },
-            OperationCheck::PartialSupport { operation, caveat } => match f(provider.as_ref(), &relative) {
-                Ok(v) => VfsOutcome::Degraded { value: v, caveat },
-                Err(e) => VfsOutcome::Blocked {
-                    operation,
-                    reason: e.to_string(),
-                    hint: None,
-                },
-            },
+            OperationCheck::PartialSupport { operation, caveat } => {
+                match f(provider.as_ref(), &relative) {
+                    Ok(v) => VfsOutcome::Degraded { value: v, caveat },
+                    Err(e) => VfsOutcome::Blocked {
+                        operation,
+                        reason: e.to_string(),
+                        hint: None,
+                    },
+                }
+            }
         }
     }
 
@@ -221,7 +226,9 @@ impl VfsService {
     }
 
     pub fn write_file(&self, path: &Path, contents: &[u8]) -> VfsOutcome<()> {
-        self.dispatch(path, VfsOperation::Write, |p, rel| p.write_file(rel, contents))
+        self.dispatch(path, VfsOperation::Write, |p, rel| {
+            p.write_file(rel, contents)
+        })
     }
 
     pub fn metadata(&self, path: &Path) -> VfsOutcome<FileMetadata> {
@@ -385,7 +392,10 @@ mod tests {
                 .ok_or_else(|| VfsError::NotFound(path.to_string_lossy().into()))
         }
         fn write_file(&self, path: &Path, contents: &[u8]) -> VfsResult<()> {
-            self.files.lock().unwrap().insert(path.to_path_buf(), contents.to_vec());
+            self.files
+                .lock()
+                .unwrap()
+                .insert(path.to_path_buf(), contents.to_vec());
             Ok(())
         }
         fn metadata(&self, path: &Path) -> VfsResult<FileMetadata> {
@@ -429,7 +439,16 @@ mod tests {
     }
 
     fn service_with_saf_mount() -> VfsService {
-        let temp_dir = std::env::temp_dir().join("vfs_service_test");
+        // Unique dir per call: several tests in this module share this helper
+        // and used to race on a single `/tmp/vfs_service_test` (one test's
+        // `remove_dir_all` wiping another's just-written file).
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let temp_dir = std::env::temp_dir().join(format!(
+            "vfs_service_test_{}_{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::fs::create_dir_all(&temp_dir).unwrap();
 
@@ -462,7 +481,9 @@ mod tests {
             .unwrap();
 
         match svc.chmod(Path::new("/mnt/sdcard/project/index.js"), 0o755) {
-            VfsOutcome::Blocked { operation, hint, .. } => {
+            VfsOutcome::Blocked {
+                operation, hint, ..
+            } => {
                 assert_eq!(operation, VfsOperation::Chmod);
                 // This hint is exactly what the terminal UI is supposed to
                 // render inline instead of a bare failure — see the
@@ -477,10 +498,14 @@ mod tests {
     #[test]
     fn test_chmod_succeeds_on_internal_mount() {
         let svc = service_with_saf_mount();
-        svc.write_file(Path::new("/index.js"), b"x").into_result().unwrap();
+        svc.write_file(Path::new("/index.js"), b"x")
+            .into_result()
+            .unwrap();
 
-        let outcome = svc.chmod(Path::new("/index.js"), 0o755);
-        assert!(matches!(outcome, VfsOutcome::Ok(())));
+        match svc.chmod(Path::new("/index.js"), 0o755) {
+            VfsOutcome::Ok(()) => {}
+            other => panic!("expected Ok, got {other:?}"),
+        }
     }
 
     #[test]
@@ -491,7 +516,9 @@ mod tests {
             Path::new("/mnt/sdcard/node_modules/.bin/real"),
             Path::new("/mnt/sdcard/project/node_modules/.bin/tool"),
         ) {
-            VfsOutcome::Blocked { operation, hint, .. } => {
+            VfsOutcome::Blocked {
+                operation, hint, ..
+            } => {
                 assert_eq!(operation, VfsOperation::Symlink);
                 assert!(hint.unwrap().contains("npm"));
             }
@@ -510,7 +537,10 @@ mod tests {
             .into_result()
             .unwrap();
 
-        match svc.rename(Path::new("/mnt/sdcard/a.txt"), Path::new("/mnt/sdcard/b.txt")) {
+        match svc.rename(
+            Path::new("/mnt/sdcard/a.txt"),
+            Path::new("/mnt/sdcard/b.txt"),
+        ) {
             VfsOutcome::Degraded { caveat, .. } => {
                 assert!(caveat.to_lowercase().contains("atomic"));
             }
@@ -527,7 +557,9 @@ mod tests {
     #[test]
     fn test_cross_mount_rename_is_blocked_not_silently_wrong() {
         let svc = service_with_saf_mount();
-        svc.write_file(Path::new("/a.txt"), b"data").into_result().unwrap();
+        svc.write_file(Path::new("/a.txt"), b"data")
+            .into_result()
+            .unwrap();
 
         match svc.rename(Path::new("/a.txt"), Path::new("/mnt/sdcard/a.txt")) {
             VfsOutcome::Blocked { reason, hint, .. } => {

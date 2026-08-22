@@ -37,29 +37,61 @@ impl CellAttrs {
         Self { bits: 0 }
     }
 
-    pub fn bold(&self) -> bool { self.bits & Self::BOLD != 0 }
-    pub fn set_bold(&mut self, v: bool) { self.set_bit(Self::BOLD, v); }
+    pub fn bold(&self) -> bool {
+        self.bits & Self::BOLD != 0
+    }
+    pub fn set_bold(&mut self, v: bool) {
+        self.set_bit(Self::BOLD, v);
+    }
 
-    pub fn italic(&self) -> bool { self.bits & Self::ITALIC != 0 }
-    pub fn set_italic(&mut self, v: bool) { self.set_bit(Self::ITALIC, v); }
+    pub fn italic(&self) -> bool {
+        self.bits & Self::ITALIC != 0
+    }
+    pub fn set_italic(&mut self, v: bool) {
+        self.set_bit(Self::ITALIC, v);
+    }
 
-    pub fn underline(&self) -> bool { self.bits & Self::UNDERLINE != 0 }
-    pub fn set_underline(&mut self, v: bool) { self.set_bit(Self::UNDERLINE, v); }
+    pub fn underline(&self) -> bool {
+        self.bits & Self::UNDERLINE != 0
+    }
+    pub fn set_underline(&mut self, v: bool) {
+        self.set_bit(Self::UNDERLINE, v);
+    }
 
-    pub fn strikethrough(&self) -> bool { self.bits & Self::STRIKETHROUGH != 0 }
-    pub fn set_strikethrough(&mut self, v: bool) { self.set_bit(Self::STRIKETHROUGH, v); }
+    pub fn strikethrough(&self) -> bool {
+        self.bits & Self::STRIKETHROUGH != 0
+    }
+    pub fn set_strikethrough(&mut self, v: bool) {
+        self.set_bit(Self::STRIKETHROUGH, v);
+    }
 
-    pub fn inverse(&self) -> bool { self.bits & Self::INVERSE != 0 }
-    pub fn set_inverse(&mut self, v: bool) { self.set_bit(Self::INVERSE, v); }
+    pub fn inverse(&self) -> bool {
+        self.bits & Self::INVERSE != 0
+    }
+    pub fn set_inverse(&mut self, v: bool) {
+        self.set_bit(Self::INVERSE, v);
+    }
 
-    pub fn blink(&self) -> bool { self.bits & Self::BLINK != 0 }
-    pub fn set_blink(&mut self, v: bool) { self.set_bit(Self::BLINK, v); }
+    pub fn blink(&self) -> bool {
+        self.bits & Self::BLINK != 0
+    }
+    pub fn set_blink(&mut self, v: bool) {
+        self.set_bit(Self::BLINK, v);
+    }
 
-    pub fn dim(&self) -> bool { self.bits & Self::DIM != 0 }
-    pub fn set_dim(&mut self, v: bool) { self.set_bit(Self::DIM, v); }
+    pub fn dim(&self) -> bool {
+        self.bits & Self::DIM != 0
+    }
+    pub fn set_dim(&mut self, v: bool) {
+        self.set_bit(Self::DIM, v);
+    }
 
-    pub fn hidden(&self) -> bool { self.bits & Self::HIDDEN != 0 }
-    pub fn set_hidden(&mut self, v: bool) { self.set_bit(Self::HIDDEN, v); }
+    pub fn hidden(&self) -> bool {
+        self.bits & Self::HIDDEN != 0
+    }
+    pub fn set_hidden(&mut self, v: bool) {
+        self.set_bit(Self::HIDDEN, v);
+    }
 
     fn set_bit(&mut self, bit: u8, v: bool) {
         if v {

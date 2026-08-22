@@ -32,12 +32,12 @@
 //! - [`ios_provider`] — placeholder only. Not resourced for Phase 1/2. See
 //!   the doc comment at the top of that file before building on it.
 
+pub mod cache;
 pub mod capabilities;
+pub mod health;
 pub mod mount;
 pub mod provider;
-pub mod cache;
 pub mod service;
-pub mod health;
 
 #[cfg(feature = "android")]
 pub mod android_saf;
@@ -45,9 +45,12 @@ pub mod android_saf;
 #[cfg(feature = "ios")]
 pub mod ios_provider;
 
-pub use capabilities::{VfsCapabilities, VfsOperation, FsType, OperationCheck, check_operation, get_capabilities_for_path};
+pub use cache::*;
+pub use capabilities::{
+    check_operation, get_capabilities_for_path, FsType, OperationCheck, VfsCapabilities,
+    VfsOperation,
+};
+pub use health::{HealthMonitor, MountHealth, PermissionProbe, PermissionState};
 pub use mount::*;
 pub use provider::*;
-pub use cache::*;
-pub use service::{VfsService, VfsOutcome};
-pub use health::{HealthMonitor, MountHealth, PermissionState, PermissionProbe};
+pub use service::{VfsOutcome, VfsService};

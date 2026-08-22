@@ -34,7 +34,7 @@ impl Screen {
     /// Create a new screen with given dimensions
     pub fn new(cols: usize, rows: usize) -> Self {
         let cells = vec![vec![Cell::default(); cols]; rows];
-        
+
         Self {
             cells,
             cols,
@@ -88,7 +88,7 @@ impl Screen {
             self.newline();
             return;
         }
-        
+
         if c == '\r' {
             self.cursor_col = 0;
             return;
@@ -118,7 +118,7 @@ impl Screen {
     pub fn newline(&mut self) {
         self.cursor_col = 0;
         self.cursor_row += 1;
-        
+
         if self.cursor_row >= self.rows {
             self.scroll_up();
             self.cursor_row = self.rows - 1;
@@ -131,12 +131,12 @@ impl Screen {
             // Move top line to scrollback
             let top_line = self.cells.remove(0);
             self.scrollback.push(top_line);
-            
+
             // Trim scrollback if too large
             while self.scrollback.len() > self.scrollback_limit {
                 self.scrollback.remove(0);
             }
-            
+
             // Add new empty line at bottom
             self.cells.push(vec![Cell::default(); self.cols]);
         }
@@ -155,7 +155,7 @@ impl Screen {
     pub fn clear_to_end(&mut self) {
         // Clear rest of current line
         self.clear_line_from_cursor();
-        
+
         // Clear all lines below
         for row in (self.cursor_row + 1)..self.rows {
             if let Some(line) = self.cells.get_mut(row) {
@@ -214,13 +214,13 @@ impl Screen {
         for row in &mut self.cells {
             row.resize(new_cols, Cell::default());
         }
-        
+
         // Add or remove rows
         self.cells.resize(new_rows, vec![Cell::default(); new_cols]);
-        
+
         self.cols = new_cols;
         self.rows = new_rows;
-        
+
         // Clamp cursor to new bounds
         self.cursor_row = self.cursor_row.min(new_rows.saturating_sub(1));
         self.cursor_col = self.cursor_col.min(new_cols.saturating_sub(1));
@@ -233,7 +233,8 @@ impl Screen {
 
     /// Get a line from scrollback (0 is most recent)
     pub fn get_scrollback_line(&self, index: usize) -> Option<&Vec<Cell>> {
-        self.scrollback.get(self.scrollback.len().saturating_sub(1 + index))
+        self.scrollback
+            .get(self.scrollback.len().saturating_sub(1 + index))
     }
 
     /// Get a row from the screen
@@ -277,7 +278,7 @@ mod tests {
         let mut screen = Screen::new(10, 5);
         screen.write_char('H');
         screen.write_char('i');
-        
+
         assert_eq!(screen.cursor(), (0, 2));
         assert_eq!(screen.get_cell(0, 0).unwrap().c, 'H');
         assert_eq!(screen.get_cell(0, 1).unwrap().c, 'i');
@@ -289,7 +290,7 @@ mod tests {
         for c in "Hello World".chars() {
             screen.write_char(c);
         }
-        
+
         // "Hello" fills row 0 (5 chars), then wraps
         // " World" starts on row 1: space at col 0, W at col 1
         assert_eq!(screen.get_cell(0, 0).unwrap().c, 'H');
@@ -306,7 +307,7 @@ mod tests {
         screen.write_char('B');
         screen.newline();
         screen.write_char('C');
-        
+
         // Screen should have scrolled, first line goes to scrollback
         assert_eq!(screen.scrollback_len(), 1);
     }
@@ -316,7 +317,7 @@ mod tests {
         let mut screen = Screen::new(10, 5);
         screen.set_cursor(4, 9);
         screen.resize(5, 3);
-        
+
         assert_eq!(screen.size(), (5, 3));
         assert_eq!(screen.cursor(), (2, 4)); // Clamped to new bounds
     }

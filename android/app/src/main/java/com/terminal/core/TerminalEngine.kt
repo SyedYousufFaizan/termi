@@ -19,25 +19,32 @@ object TerminalEngine {
      * Error codes returned by native functions
      */
     object ErrorCode {
+        // Must match rust/src/jni_safe.rs `JniErrorCode` exactly.
         const val SUCCESS = 0
-        const val INVALID_HANDLE = -1
-        const val NULL_POINTER = -2
-        const val INVALID_ARGUMENT = -3
-        const val PTY_ERROR = -4
-        const val IO_ERROR = -5
-        const val EXCEPTION_OCCURRED = -6
+        const val NULL_POINTER = -1
+        const val INVALID_HANDLE = -2
+        const val JAVA_EXCEPTION = -3
+        const val INVALID_UTF8 = -4
+        const val INVALID_ARGUMENT = -5
+        const val OUT_OF_MEMORY = -6
+        const val PTY_ERROR = -7
+        const val VFS_ERROR = -8
+        const val IO_ERROR = -9
         const val UNKNOWN = -99
         
         fun isError(code: Int): Boolean = code < 0
         
         fun describe(code: Int): String = when (code) {
             SUCCESS -> "Success"
-            INVALID_HANDLE -> "Invalid session handle"
             NULL_POINTER -> "Null pointer"
+            INVALID_HANDLE -> "Invalid session handle"
+            JAVA_EXCEPTION -> "JNI exception"
+            INVALID_UTF8 -> "Invalid UTF-8"
             INVALID_ARGUMENT -> "Invalid argument"
+            OUT_OF_MEMORY -> "Out of memory"
             PTY_ERROR -> "PTY error"
+            VFS_ERROR -> "VFS error"
             IO_ERROR -> "I/O error"
-            EXCEPTION_OCCURRED -> "JNI exception"
             UNKNOWN -> "Unknown error"
             else -> "Error code: $code"
         }

@@ -26,7 +26,7 @@ impl Default for ProcessConfig {
         let mut env = HashMap::new();
         env.insert("TERM".into(), "xterm-256color".into());
         env.insert("COLORTERM".into(), "truecolor".into());
-        
+
         Self {
             program: PathBuf::from("/system/bin/sh"),
             args: vec![],

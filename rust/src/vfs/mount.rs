@@ -2,8 +2,8 @@
 //!
 //! Tracks virtual mount points that map Unix paths to SAF URIs.
 
-use crate::vfs::capabilities::{VfsCapabilities, VfsOperation};
 use crate::utils::error::{VfsError, VfsResult};
+use crate::vfs::capabilities::{VfsCapabilities, VfsOperation};
 use log::{info, warn};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -37,7 +37,7 @@ impl MountPoint {
     pub fn internal(virtual_path: impl Into<PathBuf>, real_path: impl Into<PathBuf>) -> Self {
         let vp = virtual_path.into();
         let rp = real_path.into();
-        
+
         Self {
             display_name: vp.to_string_lossy().to_string(),
             virtual_path: vp,
@@ -48,7 +48,11 @@ impl MountPoint {
     }
 
     /// Create a new SAF mount
-    pub fn saf(virtual_path: impl Into<PathBuf>, uri: impl Into<String>, display_name: impl Into<String>) -> Self {
+    pub fn saf(
+        virtual_path: impl Into<PathBuf>,
+        uri: impl Into<String>,
+        display_name: impl Into<String>,
+    ) -> Self {
         Self {
             virtual_path: virtual_path.into(),
             source: MountSource::SafUri(uri.into()),
@@ -88,7 +92,7 @@ impl MountTable {
 
         // Always mount internal storage at root
         let _ = table.mount(MountPoint::internal("/", &root));
-        
+
         table
     }
 
@@ -102,14 +106,17 @@ impl MountTable {
     /// Add a mount point
     pub fn mount(&mut self, mount: MountPoint) -> VfsResult<()> {
         let path = mount.virtual_path.clone();
-        
+
         if self.mounts.contains_key(&path) {
-            warn!("Mount point {} already exists, unmounting first", path.display());
+            warn!(
+                "Mount point {} already exists, unmounting first",
+                path.display()
+            );
             self.unmount(&path)?;
         }
 
         info!("Mounting {} -> {:?}", path.display(), mount.source);
-        
+
         // Show limitation warning if applicable
         if let Some(warning) = mount.limitation_warning() {
             warn!("{}", warning);
@@ -123,7 +130,7 @@ impl MountTable {
     pub fn unmount(&mut self, virtual_path: &Path) -> VfsResult<()> {
         if virtual_path == Path::new("/") {
             return Err(VfsError::PermissionDenied(
-                "Cannot unmount root filesystem".into()
+                "Cannot unmount root filesystem".into(),
             ));
         }
 
@@ -156,7 +163,8 @@ impl MountTable {
 
     /// Resolve a virtual path to its mount point and relative path
     pub fn resolve(&self, virtual_path: &Path) -> VfsResult<(&MountPoint, PathBuf)> {
-        let mount = self.find_mount(virtual_path)
+        let mount = self
+            .find_mount(virtual_path)
             .ok_or_else(|| VfsError::NotMounted(virtual_path.to_string_lossy().into()))?;
 
         let relative = virtual_path
@@ -200,7 +208,7 @@ mod tests {
     #[test]
     fn test_mount_table() {
         let table = MountTable::new("/data/data/com.terminal/files");
-        
+
         // Root should be mounted
         assert!(table.find_mount(Path::new("/")).is_some());
         assert!(table.supports_operation(Path::new("/"), VfsOperation::Chmod));
@@ -209,15 +217,15 @@ mod tests {
     #[test]
     fn test_saf_mount() {
         let mut table = MountTable::new("/data/data/com.terminal/files");
-        
+
         let saf_mount = MountPoint::saf(
             "/mnt/downloads",
             "content://com.android.providers.downloads.documents/tree/downloads",
-            "Downloads"
+            "Downloads",
         );
-        
+
         table.mount(saf_mount).unwrap();
-        
+
         let mount = table.find_mount(Path::new("/mnt/downloads/test.txt"));
         assert!(mount.is_some());
         assert!(mount.unwrap().capabilities.is_saf);
@@ -227,10 +235,14 @@ mod tests {
     #[test]
     fn test_path_resolution() {
         let mut table = MountTable::new("/data/data/com.terminal/files");
-        
-        table.mount(MountPoint::saf("/mnt/sd", "content://...", "SD Card")).unwrap();
-        
-        let (_mount, relative) = table.resolve(Path::new("/mnt/sd/Documents/file.txt")).unwrap();
+
+        table
+            .mount(MountPoint::saf("/mnt/sd", "content://...", "SD Card"))
+            .unwrap();
+
+        let (_mount, relative) = table
+            .resolve(Path::new("/mnt/sd/Documents/file.txt"))
+            .unwrap();
         assert_eq!(relative, PathBuf::from("Documents/file.txt"));
     }
 

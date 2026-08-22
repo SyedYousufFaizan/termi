@@ -77,28 +77,28 @@ pub struct DirEntry {
 pub trait FsProvider: Send + Sync {
     /// Read file contents
     fn read_file(&self, path: &Path) -> VfsResult<Vec<u8>>;
-    
+
     /// Write file contents
     fn write_file(&self, path: &Path, contents: &[u8]) -> VfsResult<()>;
-    
+
     /// Get file metadata
     fn metadata(&self, path: &Path) -> VfsResult<FileMetadata>;
-    
+
     /// List directory contents
     fn list_dir(&self, path: &Path) -> VfsResult<Vec<DirEntry>>;
-    
+
     /// Create a directory
     fn create_dir(&self, path: &Path) -> VfsResult<()>;
-    
+
     /// Delete a file or empty directory
     fn delete(&self, path: &Path) -> VfsResult<()>;
-    
+
     /// Rename/move a file
     fn rename(&self, from: &Path, to: &Path) -> VfsResult<()>;
-    
+
     /// Check if path exists
     fn exists(&self, path: &Path) -> bool;
-    
+
     /// Check if path is a directory
     fn is_dir(&self, path: &Path) -> bool;
 
@@ -160,11 +160,18 @@ impl InternalProvider {
     }
 
     fn resolve_path(&self, path: &Path) -> std::path::PathBuf {
+        // Already a real path under this provider's root.
         if path.is_absolute() && path.starts_with(&self.base_path) {
-            path.to_path_buf()
-        } else {
-            self.base_path.join(path)
+            return path.to_path_buf();
         }
+
+        // `Path::join` replaces the left-hand side when the right-hand side
+        // is absolute, so a virtual path like `/index.js` would otherwise
+        // resolve to `/index.js` on the host filesystem instead of
+        // `$base/index.js`. Strip a leading `/` so virtual-absolute and
+        // relative paths both land under the provider root.
+        let relative = path.strip_prefix("/").unwrap_or(path);
+        self.base_path.join(relative)
     }
 }
 
@@ -177,13 +184,13 @@ impl FsProvider for InternalProvider {
 
     fn write_file(&self, path: &Path, contents: &[u8]) -> VfsResult<()> {
         let full_path = self.resolve_path(path);
-        
+
         // Ensure parent directory exists
         if let Some(parent) = full_path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| VfsError::PermissionDenied(e.to_string()))?;
         }
-        
+
         std::fs::write(&full_path, contents)
             .map_err(|e| VfsError::PermissionDenied(format!("{}: {}", full_path.display(), e)))
     }
@@ -203,12 +210,14 @@ impl FsProvider for InternalProvider {
             path: full_path.to_string_lossy().to_string(),
             is_dir: meta.is_dir(),
             size: meta.len(),
-            modified: meta.modified()
+            modified: meta
+                .modified()
                 .ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
-            accessed: meta.accessed()
+            accessed: meta
+                .accessed()
                 .ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs())
@@ -245,20 +254,27 @@ impl FsProvider for InternalProvider {
 
     fn delete(&self, path: &Path) -> VfsResult<()> {
         let full_path = self.resolve_path(path);
-        
+
         if full_path.is_dir() {
             std::fs::remove_dir(&full_path)
         } else {
             std::fs::remove_file(&full_path)
-        }.map_err(|e| VfsError::PermissionDenied(format!("{}: {}", full_path.display(), e)))
+        }
+        .map_err(|e| VfsError::PermissionDenied(format!("{}: {}", full_path.display(), e)))
     }
 
     fn rename(&self, from: &Path, to: &Path) -> VfsResult<()> {
         let from_path = self.resolve_path(from);
         let to_path = self.resolve_path(to);
-        
-        std::fs::rename(&from_path, &to_path)
-            .map_err(|e| VfsError::PermissionDenied(format!("{} -> {}: {}", from_path.display(), to_path.display(), e)))
+
+        std::fs::rename(&from_path, &to_path).map_err(|e| {
+            VfsError::PermissionDenied(format!(
+                "{} -> {}: {}",
+                from_path.display(),
+                to_path.display(),
+                e
+            ))
+        })
     }
 
     fn exists(&self, path: &Path) -> bool {
@@ -331,7 +347,9 @@ mod tests {
         let provider = InternalProvider::new(&temp_dir);
 
         // Write and read
-        provider.write_file(Path::new("test.txt"), b"hello").unwrap();
+        provider
+            .write_file(Path::new("test.txt"), b"hello")
+            .unwrap();
         let content = provider.read_file(Path::new("test.txt")).unwrap();
         assert_eq!(content, b"hello");
 
@@ -353,6 +371,27 @@ mod tests {
     }
 
     #[test]
+    fn test_virtual_absolute_path_stays_under_provider_root() {
+        // Regression: Path::join with an absolute RHS replaces the base, so
+        // write_file("/abs.txt") used to target the host's /abs.txt.
+        let temp_dir = env::temp_dir().join(format!("vfs_test_abs_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let provider = InternalProvider::new(&temp_dir);
+        provider
+            .write_file(Path::new("/abs.txt"), b"under-root")
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read(temp_dir.join("abs.txt")).unwrap(),
+            b"under-root"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
     #[cfg(unix)]
     fn test_internal_provider_chmod_and_symlink() {
         let temp_dir = env::temp_dir().join("vfs_test_chmod_symlink");
@@ -370,7 +409,9 @@ mod tests {
         assert_eq!(meta.permissions().mode() & 0o777, 0o600);
 
         // symlink + readlink round-trip
-        provider.symlink(Path::new("real.txt"), Path::new("link.txt")).unwrap();
+        provider
+            .symlink(Path::new("real.txt"), Path::new("link.txt"))
+            .unwrap();
         let target = provider.readlink(Path::new("link.txt")).unwrap();
         assert_eq!(target, Path::new("real.txt"));
 
@@ -384,17 +425,33 @@ mod tests {
     struct BareMinimumProvider;
 
     impl FsProvider for BareMinimumProvider {
-        fn read_file(&self, _path: &Path) -> VfsResult<Vec<u8>> { Ok(vec![]) }
-        fn write_file(&self, _path: &Path, _contents: &[u8]) -> VfsResult<()> { Ok(()) }
+        fn read_file(&self, _path: &Path) -> VfsResult<Vec<u8>> {
+            Ok(vec![])
+        }
+        fn write_file(&self, _path: &Path, _contents: &[u8]) -> VfsResult<()> {
+            Ok(())
+        }
         fn metadata(&self, _path: &Path) -> VfsResult<FileMetadata> {
             Ok(FileMetadata::file("x", "x", 0))
         }
-        fn list_dir(&self, _path: &Path) -> VfsResult<Vec<DirEntry>> { Ok(vec![]) }
-        fn create_dir(&self, _path: &Path) -> VfsResult<()> { Ok(()) }
-        fn delete(&self, _path: &Path) -> VfsResult<()> { Ok(()) }
-        fn rename(&self, _from: &Path, _to: &Path) -> VfsResult<()> { Ok(()) }
-        fn exists(&self, _path: &Path) -> bool { true }
-        fn is_dir(&self, _path: &Path) -> bool { false }
+        fn list_dir(&self, _path: &Path) -> VfsResult<Vec<DirEntry>> {
+            Ok(vec![])
+        }
+        fn create_dir(&self, _path: &Path) -> VfsResult<()> {
+            Ok(())
+        }
+        fn delete(&self, _path: &Path) -> VfsResult<()> {
+            Ok(())
+        }
+        fn rename(&self, _from: &Path, _to: &Path) -> VfsResult<()> {
+            Ok(())
+        }
+        fn exists(&self, _path: &Path) -> bool {
+            true
+        }
+        fn is_dir(&self, _path: &Path) -> bool {
+            false
+        }
     }
 
     #[test]

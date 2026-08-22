@@ -2,8 +2,14 @@
 //!
 //! Implements the FsProvider trait using SAF via JNI calls to Kotlin.
 //! This module is only compiled when the "android" feature is enabled.
-
+//!
+//! The JNI helper fields and `call_bool_method` are intentionally present
+//! even though the `FsProvider` methods still return "not implemented"
+//! (see `docs/PHASE1_STATUS.md`). Keeping them means `cargo clippy
+//! --features android` type-checks the real `jni` crate types instead of
+//! a hollow stub that would rot until someone builds an APK.
 #![cfg(feature = "android")]
+#![allow(dead_code)]
 
 use crate::jni_safe::{safe_call_bool_method, JniErrorCode, JniResult};
 use crate::utils::error::{VfsError, VfsResult};
@@ -43,7 +49,7 @@ impl SafProvider {
         })?;
 
         let path_obj: JObject = path_jstring.into();
-        
+
         safe_call_bool_method(
             env,
             self.helper_ref.as_obj(),

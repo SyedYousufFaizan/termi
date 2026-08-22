@@ -4,10 +4,10 @@
 
 pub mod cell;
 pub mod parser;
-pub mod screen;
 pub mod renderer;
+pub mod screen;
 
 pub use cell::*;
 pub use parser::*;
-pub use screen::*;
 pub use renderer::*;
+pub use screen::*;

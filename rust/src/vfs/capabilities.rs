@@ -202,11 +202,26 @@ impl VfsCapabilities {
     pub fn unsupported_operations(&self) -> Vec<VfsOperation> {
         use VfsOperation::*;
         let all_ops = [
-            Read, Write, Create, Delete, Rename, Chmod, Chown,
-            Symlink, Hardlink, ListDir, Mkdir, Stat, SetTimestamp,
-            Watch, AtomicRename, Mmap, Lock, Xattr,
+            Read,
+            Write,
+            Create,
+            Delete,
+            Rename,
+            Chmod,
+            Chown,
+            Symlink,
+            Hardlink,
+            ListDir,
+            Mkdir,
+            Stat,
+            SetTimestamp,
+            Watch,
+            AtomicRename,
+            Mmap,
+            Lock,
+            Xattr,
         ];
-        
+
         all_ops
             .iter()
             .filter(|op| !self.supported.contains(op))
@@ -252,9 +267,15 @@ pub enum OperationCheck {
     /// Operation is supported
     Supported,
     /// Operation is not supported - includes reason
-    NotSupported { operation: VfsOperation, reason: String },
+    NotSupported {
+        operation: VfsOperation,
+        reason: String,
+    },
     /// Operation is partially supported with caveats
-    PartialSupport { operation: VfsOperation, caveat: String },
+    PartialSupport {
+        operation: VfsOperation,
+        caveat: String,
+    },
 }
 
 /// Check if an operation is safe to perform on a path
@@ -313,7 +334,7 @@ pub fn get_capabilities_for_path(path: &Path) -> VfsCapabilities {
     let path_str = path.to_string_lossy();
 
     // Internal storage paths (app's own directories)
-    if path_str.starts_with("/data/") 
+    if path_str.starts_with("/data/")
         || path_str.starts_with("/data/data/")
         || path_str.contains("/files/")
         || path_str.contains("/cache/")
@@ -443,16 +464,25 @@ mod tests {
     #[test]
     fn test_tool_compatibility() {
         let saf_caps = VfsCapabilities::saf_external();
-        
+
         let npm_result = ToolCompatibility::check("npm", &saf_caps);
-        assert!(matches!(npm_result, ToolCompatibilityResult::NotCompatible { .. }));
+        assert!(matches!(
+            npm_result,
+            ToolCompatibilityResult::NotCompatible { .. }
+        ));
 
         let git_result = ToolCompatibility::check("git", &saf_caps);
-        assert!(matches!(git_result, ToolCompatibilityResult::PartiallyCompatible { .. }));
+        assert!(matches!(
+            git_result,
+            ToolCompatibilityResult::PartiallyCompatible { .. }
+        ));
 
         let internal_caps = VfsCapabilities::internal_storage();
         let npm_internal = ToolCompatibility::check("npm", &internal_caps);
-        assert!(matches!(npm_internal, ToolCompatibilityResult::FullyCompatible));
+        assert!(matches!(
+            npm_internal,
+            ToolCompatibilityResult::FullyCompatible
+        ));
     }
 
     #[test]

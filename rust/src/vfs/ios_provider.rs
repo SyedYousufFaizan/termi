@@ -27,7 +27,9 @@ impl FsProvider for IosProvider {
     }
 
     fn write_file(&self, path: &Path, _contents: &[u8]) -> VfsResult<()> {
-        Err(VfsError::PermissionDenied("iOS provider not implemented".into()))
+        Err(VfsError::PermissionDenied(
+            "iOS provider not implemented".into(),
+        ))
     }
 
     fn metadata(&self, path: &Path) -> VfsResult<FileMetadata> {
@@ -39,15 +41,21 @@ impl FsProvider for IosProvider {
     }
 
     fn create_dir(&self, path: &Path) -> VfsResult<()> {
-        Err(VfsError::PermissionDenied("iOS provider not implemented".into()))
+        Err(VfsError::PermissionDenied(
+            "iOS provider not implemented".into(),
+        ))
     }
 
     fn delete(&self, path: &Path) -> VfsResult<()> {
-        Err(VfsError::PermissionDenied("iOS provider not implemented".into()))
+        Err(VfsError::PermissionDenied(
+            "iOS provider not implemented".into(),
+        ))
     }
 
     fn rename(&self, from: &Path, to: &Path) -> VfsResult<()> {
-        Err(VfsError::PermissionDenied("iOS provider not implemented".into()))
+        Err(VfsError::PermissionDenied(
+            "iOS provider not implemented".into(),
+        ))
     }
 
     fn exists(&self, _path: &Path) -> bool {

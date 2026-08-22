@@ -3,10 +3,10 @@
 //! This module defines all error types used throughout the crate.
 //! Follows the "make invalid states unrepresentable" principle.
 
-use thiserror::Error;
 use crate::jni_safe::JniErrorCode;
 use crate::session_state::CheckpointError;
 use crate::vfs::capabilities::VfsOperation;
+use thiserror::Error;
 
 /// Top-level error type for the terminal core
 #[derive(Error, Debug)]
@@ -206,7 +206,7 @@ pub type SessionResult<T> = std::result::Result<T, SessionError>;
 pub trait OptionExt<T> {
     /// Convert Option to Result with PTY error
     fn ok_or_pty(self, msg: impl Into<String>) -> PtyResult<T>;
-    
+
     /// Convert Option to Result with VFS error
     fn ok_or_vfs_not_found(self, path: impl Into<String>) -> VfsResult<T>;
 }

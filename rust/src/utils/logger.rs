@@ -28,7 +28,7 @@ impl Log for TerminalLogger {
                 Level::Debug => 'D',
                 Level::Trace => 'T',
             };
-            
+
             // For now, print to stderr which Android captures
             eprintln!(
                 "[{}] {} {}: {}",
@@ -51,13 +51,13 @@ static LOGGER: TerminalLogger = TerminalLogger {
 /// Call this once at library load time
 pub fn init() -> Result<(), SetLoggerError> {
     log::set_logger(&LOGGER)?;
-    
+
     #[cfg(debug_assertions)]
     log::set_max_level(LevelFilter::Debug);
-    
+
     #[cfg(not(debug_assertions))]
     log::set_max_level(LevelFilter::Info);
-    
+
     Ok(())
 }
 

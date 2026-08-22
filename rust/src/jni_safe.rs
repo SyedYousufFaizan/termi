@@ -68,8 +68,11 @@ pub fn install_panic_hook() {
     {
         std::panic::set_hook(Box::new(|panic_info| {
             // Log the panic but don't propagate it
-            error!("PANIC in native code (caught at FFI boundary): {}", panic_info);
-            
+            error!(
+                "PANIC in native code (caught at FFI boundary): {}",
+                panic_info
+            );
+
             // In release builds with panic=abort, this won't even run
             // But in debug builds, this prevents unwinding across FFI
         }));
@@ -128,7 +131,10 @@ pub fn safe_call_void_method(
     args: &[jni::objects::JValue],
 ) -> JniResult<()> {
     if obj.is_null() {
-        error!("safe_call_void_method: null object for method {}", method_name);
+        error!(
+            "safe_call_void_method: null object for method {}",
+            method_name
+        );
         return Err(JniErrorCode::NullPointer);
     }
 
@@ -158,7 +164,10 @@ pub fn safe_call_int_method(
     args: &[jni::objects::JValue],
 ) -> JniResult<i32> {
     if obj.is_null() {
-        error!("safe_call_int_method: null object for method {}", method_name);
+        error!(
+            "safe_call_int_method: null object for method {}",
+            method_name
+        );
         return Err(JniErrorCode::NullPointer);
     }
 
@@ -191,7 +200,10 @@ pub fn safe_call_bool_method(
     args: &[jni::objects::JValue],
 ) -> JniResult<bool> {
     if obj.is_null() {
-        error!("safe_call_bool_method: null object for method {}", method_name);
+        error!(
+            "safe_call_bool_method: null object for method {}",
+            method_name
+        );
         return Err(JniErrorCode::NullPointer);
     }
 
@@ -224,7 +236,10 @@ pub fn safe_call_long_method(
     args: &[jni::objects::JValue],
 ) -> JniResult<i64> {
     if obj.is_null() {
-        error!("safe_call_long_method: null object for method {}", method_name);
+        error!(
+            "safe_call_long_method: null object for method {}",
+            method_name
+        );
         return Err(JniErrorCode::NullPointer);
     }
 
@@ -287,9 +302,9 @@ pub fn handle_to_ptr<T>(handle: i64) -> JniResult<*mut T> {
     }
 
     let ptr = handle as *mut T;
-    
+
     // We can't fully validate the pointer, but we can check alignment
-    if (ptr as usize) % std::mem::align_of::<T>() != 0 {
+    if !(ptr as usize).is_multiple_of(std::mem::align_of::<T>()) {
         error!("Invalid handle: misaligned pointer");
         return Err(JniErrorCode::InvalidHandle);
     }
@@ -302,21 +317,32 @@ pub fn ptr_to_handle<T>(ptr: *mut T) -> i64 {
     ptr as i64
 }
 
-/// Safe wrapper for getting a reference from a handle
-/// Use this when you need to read from a handle
+/// Safe wrapper for getting a reference from a handle.
+/// Use this when you need to read from a handle.
+///
+/// # Safety
+///
+/// `handle` must have been produced by [`handle_box`] for a live value of
+/// type `T`, and no mutable alias may exist for the duration of `'a`.
 pub unsafe fn handle_to_ref<'a, T>(handle: i64) -> JniResult<&'a T> {
     let ptr = handle_to_ptr::<T>(handle)?;
-    
+
     // SAFETY: Caller guarantees the handle points to valid, initialized memory
     // and will not be accessed mutably during the lifetime 'a
     Ok(&*ptr)
 }
 
-/// Safe wrapper for getting a mutable reference from a handle
-/// Use this when you need to modify through a handle
+/// Safe wrapper for getting a mutable reference from a handle.
+/// Use this when you need to modify through a handle.
+///
+/// # Safety
+///
+/// `handle` must have been produced by [`handle_box`] for a live value of
+/// type `T`, and no other alias (mutable or shared) may exist for the
+/// duration of `'a`.
 pub unsafe fn handle_to_mut<'a, T>(handle: i64) -> JniResult<&'a mut T> {
     let ptr = handle_to_ptr::<T>(handle)?;
-    
+
     // SAFETY: Caller guarantees the handle points to valid, initialized memory
     // and will not be accessed (mutably or immutably) during the lifetime 'a
     Ok(&mut *ptr)
@@ -329,8 +355,14 @@ pub fn handle_box<T>(value: T) -> i64 {
     ptr_to_handle(Box::into_raw(boxed))
 }
 
-/// Safely drop a boxed value from its handle
-/// CRITICAL: Only call this once per handle
+/// Safely drop a boxed value from its handle.
+/// CRITICAL: Only call this once per handle.
+///
+/// # Safety
+///
+/// `handle` must have been produced by [`handle_box`] for a value of type
+/// `T`, must not have been dropped already, and no outstanding references
+/// to that value may exist.
 pub unsafe fn handle_drop<T>(handle: i64) -> JniResult<()> {
     if handle == 0 {
         warn!("handle_drop called with null handle (already freed?)");
@@ -338,13 +370,13 @@ pub unsafe fn handle_drop<T>(handle: i64) -> JniResult<()> {
     }
 
     let ptr = handle_to_ptr::<T>(handle)?;
-    
+
     // SAFETY: Caller guarantees:
     // 1. handle was created by handle_box
     // 2. handle has not been freed before
     // 3. no references to the value exist
     let _ = Box::from_raw(ptr);
-    
+
     Ok(())
 }
 
@@ -374,9 +406,9 @@ pub fn create_global_ref<'a>(env: &mut JNIEnv<'a>, obj: &JObject<'a>) -> JniResu
 macro_rules! jni_safe_block {
     ($env:expr, $block:expr) => {{
         use $crate::jni_safe::{check_and_clear_exception, JniErrorCode};
-        
+
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $block));
-        
+
         match result {
             Ok(inner_result) => {
                 // Check for any uncaught exceptions
@@ -400,7 +432,11 @@ macro_rules! jni_safe_block {
 /// for the same host-testability reason as the handle helpers above.
 #[inline]
 pub const fn to_jboolean(b: bool) -> u8 {
-    if b { 1 } else { 0 }
+    if b {
+        1
+    } else {
+        0
+    }
 }
 
 /// Convert jboolean to Rust bool
@@ -426,9 +462,20 @@ mod tests {
 
     #[test]
     fn test_error_codes() {
+        // These numeric values are part of the JNI contract with
+        // `TerminalEngine.ErrorCode` on the Kotlin side. Changing one
+        // without changing the other mislabels every native error.
         assert_eq!(JniErrorCode::Success as i32, 0);
         assert_eq!(JniErrorCode::NullPointer as i32, -1);
         assert_eq!(JniErrorCode::InvalidHandle as i32, -2);
+        assert_eq!(JniErrorCode::JavaException as i32, -3);
+        assert_eq!(JniErrorCode::InvalidUtf8 as i32, -4);
+        assert_eq!(JniErrorCode::InvalidArgument as i32, -5);
+        assert_eq!(JniErrorCode::OutOfMemory as i32, -6);
+        assert_eq!(JniErrorCode::PtyError as i32, -7);
+        assert_eq!(JniErrorCode::VfsError as i32, -8);
+        assert_eq!(JniErrorCode::IoError as i32, -9);
+        assert_eq!(JniErrorCode::Unknown as i32, -99);
     }
 
     #[test]
@@ -436,7 +483,7 @@ mod tests {
         let value = Box::new(42i32);
         let handle = ptr_to_handle(Box::into_raw(value));
         assert!(handle != 0);
-        
+
         unsafe {
             let ptr = handle_to_ptr::<i32>(handle).unwrap();
             assert_eq!(*ptr, 42);

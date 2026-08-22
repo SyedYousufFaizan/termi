@@ -12,8 +12,8 @@
 #![cfg(feature = "android")]
 
 use crate::jni_safe::{
-    handle_box, handle_drop, handle_to_mut, handle_to_ref,
-    safe_get_string, safe_new_string, JniErrorCode,
+    handle_box, handle_drop, handle_to_mut, handle_to_ref, safe_get_string, safe_new_string,
+    JniErrorCode,
 };
 use crate::pty::PtySession;
 use crate::session_state::{CheckpointManager, SessionState};
@@ -46,10 +46,7 @@ pub extern "system" fn Java_com_terminal_core_TerminalEngine_nativeGetVersion<'l
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> JString<'local> {
-    match safe_new_string(&mut env, crate::VERSION) {
-        Ok(s) => s,
-        Err(_) => JString::default(),
-    }
+    safe_new_string(&mut env, crate::VERSION).unwrap_or_default()
 }
 
 // ============================================================================
@@ -77,7 +74,10 @@ pub extern "system" fn Java_com_terminal_core_TerminalEngine_nativeCreateSession
     match PtySession::new(&session_id) {
         Ok(session) => {
             let handle = handle_box(session);
-            info!("Created PTY session '{}' with handle {}", session_id, handle);
+            info!(
+                "Created PTY session '{}' with handle {}",
+                session_id, handle
+            );
             handle
         }
         Err(e) => {

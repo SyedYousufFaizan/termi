@@ -161,7 +161,7 @@ impl CheckpointManager {
     /// Create a new checkpoint manager
     pub fn new(checkpoint_dir: impl Into<PathBuf>) -> Self {
         let dir = checkpoint_dir.into();
-        
+
         // Ensure directory exists
         if let Err(e) = fs::create_dir_all(&dir) {
             error!("Failed to create checkpoint directory {:?}: {}", dir, e);
@@ -182,7 +182,8 @@ impl CheckpointManager {
 
     /// Get checkpoint file path for a session
     fn checkpoint_path(&self, session_id: &str) -> PathBuf {
-        self.checkpoint_dir.join(format!("{}.checkpoint", session_id))
+        self.checkpoint_dir
+            .join(format!("{}.checkpoint", session_id))
     }
 
     /// Check if enough time has passed since last checkpoint
@@ -227,18 +228,16 @@ impl CheckpointManager {
 
         // Write to temporary file first (atomic write)
         let temp_path = path.with_extension("checkpoint.tmp");
-        let mut file = File::create(&temp_path)
-            .map_err(|e| CheckpointError::Io(e.to_string()))?;
-        
+        let mut file = File::create(&temp_path).map_err(|e| CheckpointError::Io(e.to_string()))?;
+
         file.write_all(&data)
             .map_err(|e| CheckpointError::Io(e.to_string()))?;
-        
+
         file.sync_all()
             .map_err(|e| CheckpointError::Io(e.to_string()))?;
 
         // Atomic rename
-        fs::rename(&temp_path, &path)
-            .map_err(|e| CheckpointError::Io(e.to_string()))?;
+        fs::rename(&temp_path, &path).map_err(|e| CheckpointError::Io(e.to_string()))?;
 
         self.last_checkpoint = Some(Instant::now());
         info!(
@@ -259,9 +258,8 @@ impl CheckpointManager {
             return Err(CheckpointError::NotFound(session_id.into()));
         }
 
-        let mut file = File::open(&path)
-            .map_err(|e| CheckpointError::Io(e.to_string()))?;
-        
+        let mut file = File::open(&path).map_err(|e| CheckpointError::Io(e.to_string()))?;
+
         let mut data = Vec::new();
         file.read_to_end(&mut data)
             .map_err(|e| CheckpointError::Io(e.to_string()))?;
@@ -287,11 +285,11 @@ impl CheckpointManager {
         if let Ok(entries) = fs::read_dir(&self.checkpoint_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().map_or(false, |ext| ext == "checkpoint") {
+                if path.extension().is_some_and(|ext| ext == "checkpoint") {
                     if let Some(stem) = path.file_stem() {
                         let session_id = stem.to_string_lossy().into_owned();
                         let metadata = entry.metadata().ok();
-                        
+
                         checkpoints.push(CheckpointInfo {
                             session_id,
                             path,
@@ -303,17 +301,16 @@ impl CheckpointManager {
             }
         }
 
-        checkpoints.sort_by(|a, b| b.modified.cmp(&a.modified));
+        checkpoints.sort_by_key(|a| std::cmp::Reverse(a.modified));
         checkpoints
     }
 
     /// Delete a checkpoint
     pub fn delete_checkpoint(&self, session_id: &str) -> Result<(), CheckpointError> {
         let path = self.checkpoint_path(session_id);
-        
+
         if path.exists() {
-            fs::remove_file(&path)
-                .map_err(|e| CheckpointError::Io(e.to_string()))?;
+            fs::remove_file(&path).map_err(|e| CheckpointError::Io(e.to_string()))?;
             info!("Deleted checkpoint: {}", session_id);
         }
 
@@ -327,7 +324,10 @@ impl CheckpointManager {
 
         for checkpoint in checkpoints.iter().skip(keep_count) {
             if let Err(e) = self.delete_checkpoint(&checkpoint.session_id) {
-                warn!("Failed to delete old checkpoint {}: {:?}", checkpoint.session_id, e);
+                warn!(
+                    "Failed to delete old checkpoint {}: {:?}",
+                    checkpoint.session_id, e
+                );
             } else {
                 deleted += 1;
             }
@@ -373,7 +373,11 @@ impl std::fmt::Display for CheckpointError {
             CheckpointError::Serialization(msg) => write!(f, "Serialization error: {}", msg),
             CheckpointError::Deserialization(msg) => write!(f, "Deserialization error: {}", msg),
             CheckpointError::VersionMismatch { expected, found } => {
-                write!(f, "Version mismatch: expected {}, found {}", expected, found)
+                write!(
+                    f,
+                    "Version mismatch: expected {}, found {}",
+                    expected, found
+                )
             }
         }
     }
@@ -405,7 +409,7 @@ mod tests {
         let _ = fs::remove_dir_all(&temp_dir);
 
         let mut manager = CheckpointManager::new(&temp_dir);
-        
+
         let mut state = TerminalState::new("test_session");
         state.cwd = "/home/test".into();
         state.screen_buffer.push(ScreenLine {
@@ -418,7 +422,7 @@ mod tests {
 
         // Restore checkpoint
         let restored = manager.restore("test_session").expect("Restore failed");
-        
+
         assert_eq!(restored.session_id, "test_session");
         assert_eq!(restored.cwd, "/home/test");
         assert_eq!(restored.state, SessionState::Restored);
@@ -432,7 +436,7 @@ mod tests {
     fn test_checkpoint_not_found() {
         let temp_dir = env::temp_dir().join("terminal_test_notfound");
         let manager = CheckpointManager::new(&temp_dir);
-        
+
         let result = manager.restore("nonexistent");
         assert!(matches!(result, Err(CheckpointError::NotFound(_))));
 
@@ -444,7 +448,7 @@ mod tests {
         let id1 = generate_session_id();
         std::thread::sleep(Duration::from_micros(10));
         let id2 = generate_session_id();
-        
+
         assert_ne!(id1, id2);
         assert!(id1.starts_with("session_"));
     }

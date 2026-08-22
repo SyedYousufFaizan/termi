@@ -39,7 +39,7 @@ impl RenderLine {
     pub fn from_cells(cells: &[Cell]) -> Self {
         let text: String = cells.iter().map(|c| c.c).collect();
         let spans = Self::extract_spans(cells);
-        
+
         Self { text, spans }
     }
 
@@ -82,7 +82,7 @@ impl RenderLine {
                 };
             }
         }
-        
+
         spans.push(current_span);
         spans
     }
@@ -154,16 +154,19 @@ impl Renderer {
         if self.scroll_offset > 0 {
             // Showing scrollback
             let scroll_start = scrollback_len.saturating_sub(self.scroll_offset);
-            
+
             for i in 0..rows {
                 let line_idx = scroll_start + i;
-                
+
                 if line_idx < scrollback_len {
                     // From scrollback
                     if let Some(cells) = screen.get_scrollback_line(scrollback_len - 1 - line_idx) {
                         lines.push(RenderLine::from_cells(cells));
                     } else {
-                        lines.push(RenderLine { text: String::new(), spans: Vec::new() });
+                        lines.push(RenderLine {
+                            text: String::new(),
+                            spans: Vec::new(),
+                        });
                     }
                 } else {
                     // From screen
@@ -171,7 +174,10 @@ impl Renderer {
                     if let Some(cells) = screen.get_row(screen_row) {
                         lines.push(RenderLine::from_cells(cells));
                     } else {
-                        lines.push(RenderLine { text: String::new(), spans: Vec::new() });
+                        lines.push(RenderLine {
+                            text: String::new(),
+                            spans: Vec::new(),
+                        });
                     }
                 }
             }
@@ -181,7 +187,10 @@ impl Renderer {
                 if let Some(cells) = screen.get_row(row) {
                     lines.push(RenderLine::from_cells(cells));
                 } else {
-                    lines.push(RenderLine { text: String::new(), spans: Vec::new() });
+                    lines.push(RenderLine {
+                        text: String::new(),
+                        spans: Vec::new(),
+                    });
                 }
             }
         }
@@ -212,12 +221,8 @@ mod tests {
 
     #[test]
     fn test_render_line() {
-        let cells = vec![
-            Cell::new('H'),
-            Cell::new('i'),
-            Cell::new(' '),
-        ];
-        
+        let cells = vec![Cell::new('H'), Cell::new('i'), Cell::new(' ')];
+
         let line = RenderLine::from_cells(&cells);
         assert_eq!(line.text, "Hi ");
         assert!(!line.spans.is_empty());
@@ -230,7 +235,7 @@ mod tests {
             Cell::styled('B', DEFAULT_FG, 0xFF000000, Default::default()),
             Cell::styled('C', 0xFFFF0000, 0xFF000000, Default::default()), // Different fg
         ];
-        
+
         let line = RenderLine::from_cells(&cells);
         // Should have 2 spans: "AB" and "C"
         assert_eq!(line.spans.len(), 2);
@@ -242,13 +247,13 @@ mod tests {
     fn test_renderer_scroll() {
         let mut renderer = Renderer::new();
         assert_eq!(renderer.scroll_offset, 0);
-        
+
         renderer.scroll_up(5, 100);
         assert_eq!(renderer.scroll_offset, 5);
-        
+
         renderer.scroll_down(2);
         assert_eq!(renderer.scroll_offset, 3);
-        
+
         renderer.scroll_to_bottom();
         assert_eq!(renderer.scroll_offset, 0);
     }

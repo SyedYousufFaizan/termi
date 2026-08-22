@@ -64,9 +64,9 @@ impl PermissionState {
                 "Access to this storage may have lapsed. Tap to refresh — this usually \
                  doesn't require re-selecting the folder.",
             ),
-            PermissionState::Revoked => Some(
-                "Access to this storage was revoked. Tap to choose the folder again.",
-            ),
+            PermissionState::Revoked => {
+                Some("Access to this storage was revoked. Tap to choose the folder again.")
+            }
             PermissionState::Valid | PermissionState::NotApplicable => None,
         }
     }
@@ -175,11 +175,16 @@ mod tests {
 
     impl FakeProbe {
         fn new() -> Self {
-            Self { states: Mutex::new(HashMap::new()) }
+            Self {
+                states: Mutex::new(HashMap::new()),
+            }
         }
 
         fn set(&self, path: &str, state: PermissionState) {
-            self.states.lock().unwrap().insert(PathBuf::from(path), state);
+            self.states
+                .lock()
+                .unwrap()
+                .insert(PathBuf::from(path), state);
         }
     }
 
@@ -197,10 +202,18 @@ mod tests {
     fn table_with_two_mounts() -> MountTable {
         let mut table = MountTable::new("/data/data/com.termi/files");
         table
-            .mount(MountPoint::saf("/mnt/sdcard", "content://fake/sdcard", "SD Card"))
+            .mount(MountPoint::saf(
+                "/mnt/sdcard",
+                "content://fake/sdcard",
+                "SD Card",
+            ))
             .unwrap();
         table
-            .mount(MountPoint::saf("/mnt/usb", "content://fake/usb", "USB Drive"))
+            .mount(MountPoint::saf(
+                "/mnt/usb",
+                "content://fake/usb",
+                "USB Drive",
+            ))
             .unwrap();
         table
     }
@@ -227,7 +240,10 @@ mod tests {
         let needs_attention = monitor.scan_needs_attention(&table);
         assert_eq!(needs_attention.len(), 1);
         assert_eq!(needs_attention[0].display_name, "SD Card");
-        assert!(needs_attention[0].suggested_action.unwrap().contains("refresh"));
+        assert!(needs_attention[0]
+            .suggested_action
+            .unwrap()
+            .contains("refresh"));
     }
 
     #[test]

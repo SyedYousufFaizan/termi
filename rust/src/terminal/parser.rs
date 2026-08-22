@@ -196,7 +196,7 @@ impl Perform for ParserPerformer {
                 's' => {
                     debug!("Save cursor (not implemented)");
                 }
-                // Restore cursor position  
+                // Restore cursor position
                 'u' => {
                     debug!("Restore cursor (not implemented)");
                 }
@@ -340,7 +340,8 @@ impl ParserPerformer {
                             let r = iter.next().and_then(|p| p.first().copied()).unwrap_or(0);
                             let g = iter.next().and_then(|p| p.first().copied()).unwrap_or(0);
                             let b = iter.next().and_then(|p| p.first().copied()).unwrap_or(0);
-                            self.fg = 0xFF000000 | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
+                            self.fg =
+                                0xFF000000 | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
                         }
                     }
                 }
@@ -358,7 +359,8 @@ impl ParserPerformer {
                             let r = iter.next().and_then(|p| p.first().copied()).unwrap_or(0);
                             let g = iter.next().and_then(|p| p.first().copied()).unwrap_or(0);
                             let b = iter.next().and_then(|p| p.first().copied()).unwrap_or(0);
-                            self.bg = 0xFF000000 | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
+                            self.bg =
+                                0xFF000000 | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
                         }
                     }
                 }

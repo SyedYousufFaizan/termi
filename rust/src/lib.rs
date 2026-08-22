@@ -46,8 +46,8 @@ pub mod android_jni;
 // Re-exports for convenience
 pub use jni_safe::JniErrorCode;
 pub use session_state::{CheckpointManager, SessionState, TerminalState};
+pub use utils::error::{Result, TerminalError};
 pub use vfs::capabilities::{VfsCapabilities, VfsOperation};
-pub use utils::error::{TerminalError, Result};
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

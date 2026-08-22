@@ -1,9 +1,12 @@
 //! PTY (Pseudo-Terminal) management module
 //!
-//! Handles spawning and managing terminal processes using the portable-pty crate.
+//! POSIX `posix_openpt` implementation that compiles for both host Linux
+//! and Android (`target_os = "android"`). See [`unix`] for why this is
+//! not `portable-pty`.
 
 pub mod core;
 pub mod process;
+pub mod unix;
 
 pub use core::*;
 pub use process::*;

@@ -1,14 +1,19 @@
 //! Core PTY functionality
 //!
 //! Provides the main interface for creating and managing PTY sessions.
-//! Uses portable-pty for cross-platform PTY support.
+//! Uses POSIX `posix_openpt` (Linux and Android). We do **not** use
+//! `portable-pty` here: that crate depends on `termios` 0.2, which does
+//! not compile for `target_os = "android"` and is what made the NDK CI
+//! job fail.
 
+use crate::pty::unix::{child_exit_code, spawn_on_pty, PtyMaster, PtySize};
 use crate::session_state::{SessionState, TerminalState};
 use crate::utils::error::{PtyError, PtyResult};
 use crate::utils::sync_ext::LockExt;
 use log::{debug, error, info, warn};
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use std::fs::File;
 use std::io::{Read, Write};
+use std::process::Child;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -17,14 +22,14 @@ use std::time::Duration;
 pub struct PtySession {
     /// Session state for checkpointing
     state: Arc<Mutex<TerminalState>>,
-    /// The PTY master (for read/write)
-    master: Option<Box<dyn MasterPty + Send>>,
+    /// The PTY master (for resize ioctl)
+    master: Option<PtyMaster>,
     /// Writer handle for the PTY
-    writer: Option<Box<dyn Write + Send>>,
-    /// Reader handle for the PTY  
-    reader: Option<Box<dyn Read + Send>>,
+    writer: Option<File>,
+    /// Reader handle for the PTY
+    reader: Option<File>,
     /// Child process handle
-    child: Option<Box<dyn Child + Send + Sync>>,
+    child: Option<Child>,
     /// Whether the PTY is running
     running: bool,
     /// Exit code if process has exited
@@ -47,12 +52,7 @@ impl PtySession {
             child: None,
             running: false,
             exit_code: None,
-            size: PtySize {
-                rows: 24,
-                cols: 80,
-                pixel_width: 0,
-                pixel_height: 0,
-            },
+            size: PtySize::default(),
         })
     }
 
@@ -65,56 +65,26 @@ impl PtySession {
 
         info!("Spawning shell: {}", shell_path);
 
-        // Get the native PTY system
-        let pty_system = native_pty_system();
-
-        // Open a PTY pair
-        let pair = pty_system.openpty(self.size).map_err(|e| {
-            error!("Failed to open PTY: {}", e);
-            PtyError::SpawnFailed(format!("Failed to open PTY: {}", e))
-        })?;
-
-        // Build the command
-        let mut cmd = CommandBuilder::new(shell_path);
-        
-        // Set up environment
-        cmd.env("TERM", "xterm-256color");
-        cmd.env("COLORTERM", "truecolor");
-        cmd.env("LANG", "en_US.UTF-8");
-        
-        // Get current working directory from state
-        if let Ok(state) = self.state.lock() {
+        let cwd = self.state.lock().ok().and_then(|state| {
             if !state.cwd.is_empty() && state.cwd != "/" {
-                cmd.cwd(&state.cwd);
+                Some(state.cwd.clone())
+            } else {
+                None
             }
-        }
+        });
 
-        // Spawn the child process
-        let child = pair.slave.spawn_command(cmd).map_err(|e| {
-            error!("Failed to spawn shell: {}", e);
-            PtyError::SpawnFailed(format!("Failed to spawn {}: {}", shell_path, e))
-        })?;
+        let (master, child) = spawn_on_pty(shell_path, self.size, cwd.as_deref())?;
 
-        // Get reader and writer handles
-        let reader = pair.master.try_clone_reader().map_err(|e| {
-            error!("Failed to get PTY reader: {}", e);
-            PtyError::SpawnFailed(format!("Failed to get reader: {}", e))
-        })?;
+        let reader = master.try_clone_reader()?;
+        let writer = master.try_clone_writer()?;
 
-        let writer = pair.master.take_writer().map_err(|e| {
-            error!("Failed to get PTY writer: {}", e);
-            PtyError::SpawnFailed(format!("Failed to get writer: {}", e))
-        })?;
-
-        // Store handles
-        self.master = Some(pair.master);
+        self.master = Some(master);
         self.reader = Some(reader);
         self.writer = Some(writer);
         self.child = Some(child);
         self.running = true;
         self.exit_code = None;
 
-        // Update state
         if let Ok(mut state) = self.state.lock() {
             state.transition_to(SessionState::Active);
         }
@@ -136,7 +106,6 @@ impl PtySession {
             PtyError::WriteFailed(e.to_string())
         })?;
 
-        // Flush to ensure data is sent immediately
         writer.flush().map_err(|e| {
             warn!("PTY flush failed: {}", e);
             PtyError::WriteFailed(e.to_string())
@@ -155,12 +124,8 @@ impl PtySession {
 
         let reader = self.reader.as_mut().ok_or(PtyError::NotInitialized)?;
 
-        // Note: portable-pty reader is blocking by default
-        // For non-blocking, we'd need to use poll/select or async
-        // For now, this will block until data is available
         match reader.read(buf) {
             Ok(0) => {
-                // EOF - process likely exited
                 self.check_child_status();
                 Ok(0)
             }
@@ -169,7 +134,6 @@ impl PtySession {
                 Ok(n)
             }
             Err(e) => {
-                // Check if it's just a temporary error
                 if e.kind() == std::io::ErrorKind::WouldBlock {
                     Ok(0)
                 } else {
@@ -187,10 +151,8 @@ impl PtySession {
             return Err(PtyError::NotInitialized);
         }
 
-        // Simple timeout implementation using a thread
-        // In production, use proper async I/O
         let reader = self.reader.take().ok_or(PtyError::NotInitialized)?;
-        
+
         let buf_len = buf.len();
         let shared_buf = Arc::new(Mutex::new(vec![0u8; buf_len]));
         let shared_buf_clone = shared_buf.clone();
@@ -214,13 +176,10 @@ impl PtySession {
             reader
         });
 
-        // Wait for thread with timeout
         thread::sleep(timeout);
-        
-        // Check if we got a result
+
         let result = shared_result.lock_safe().take();
-        
-        // Try to get reader back
+
         match handle.join() {
             Ok(reader) => {
                 self.reader = Some(reader);
@@ -253,15 +212,10 @@ impl PtySession {
             pixel_height: 0,
         };
 
-        // Resize the actual PTY if running
         if let Some(master) = &self.master {
-            master.resize(self.size).map_err(|e| {
-                error!("PTY resize failed: {}", e);
-                PtyError::ResizeFailed(e.to_string())
-            })?;
+            master.resize(self.size)?;
         }
 
-        // Update state
         if let Ok(mut state) = self.state.lock() {
             state.dimensions = (cols, rows);
         }
@@ -274,7 +228,7 @@ impl PtySession {
         if let Some(child) = &mut self.child {
             match child.try_wait() {
                 Ok(Some(status)) => {
-                    let code = status.exit_code() as i32;
+                    let code = child_exit_code(status);
                     info!("Child process exited with code: {}", code);
                     self.exit_code = Some(code);
                     self.running = false;
@@ -283,9 +237,7 @@ impl PtySession {
                         state.transition_to(SessionState::Checkpointed);
                     }
                 }
-                Ok(None) => {
-                    // Still running
-                }
+                Ok(None) => {}
                 Err(e) => {
                     warn!("Failed to check child status: {}", e);
                 }
@@ -302,7 +254,7 @@ impl PtySession {
             PtyError::SpawnFailed(format!("Wait failed: {}", e))
         })?;
 
-        let code = status.exit_code() as i32;
+        let code = child_exit_code(status);
         self.exit_code = Some(code);
         self.running = false;
 
@@ -359,22 +311,18 @@ impl PtySession {
 
         info!("Sending signal {} to PTY", signal);
 
-        // portable-pty doesn't have direct signal support
-        // For SIGINT (Ctrl+C), we can send the character
         match signal {
             2 => {
-                // SIGINT - send Ctrl+C
                 self.write(&[0x03])?;
             }
             3 => {
-                // SIGQUIT - send Ctrl+\
                 self.write(&[0x1c])?;
             }
-            // For other signals, we'd need platform-specific code
             _ => {
-                warn!("Signal {} not directly supported, attempting via child", signal);
-                // On Unix, we could use kill() on the child PID
-                // For now, log a warning
+                warn!(
+                    "Signal {} not directly supported, attempting via child",
+                    signal
+                );
             }
         }
 
@@ -385,14 +333,11 @@ impl PtySession {
     pub fn close(&mut self) -> PtyResult<()> {
         info!("Closing PTY session");
 
-        // Drop child first to trigger cleanup
         if let Some(mut child) = self.child.take() {
-            // Try to kill if still running
             let _ = child.kill();
             let _ = child.wait();
         }
 
-        // Drop PTY handles
         self.writer = None;
         self.reader = None;
         self.master = None;
@@ -414,10 +359,6 @@ impl Drop for PtySession {
     }
 }
 
-// Ensure PtySession is Send (required for JNI)
-// Note: We manage thread safety through the Arc<Mutex<>> on state
-unsafe impl Send for PtySession {}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -434,35 +375,26 @@ mod tests {
     fn test_pty_size() {
         let mut session = PtySession::new("test").unwrap();
         session.resize(120, 40).unwrap();
-        
-        // Verify dimensions via terminal_state()
+
         let state = session.terminal_state().unwrap();
         assert_eq!(state.dimensions, (120, 40));
     }
 
-    // Note: Full PTY tests require an actual shell
-    // These are run manually or in integration tests
     #[test]
-    #[ignore] // Run with: cargo test -- --ignored
+    #[ignore]
     fn test_pty_spawn_and_command() {
         let mut session = PtySession::new("integration_test").unwrap();
-        
-        // Try to spawn a shell (this test requires /bin/sh)
-        #[cfg(unix)]
-        {
-            session.spawn_shell("/bin/sh").unwrap();
-            assert!(session.is_running());
-            
-            // Write a command
-            session.write(b"echo hello\n").unwrap();
-            
-            // Read output (blocking)
-            let mut buf = [0u8; 1024];
-            let n = session.read(&mut buf).unwrap();
-            assert!(n > 0);
-            
-            session.close().unwrap();
-            assert!(!session.is_running());
-        }
+
+        session.spawn_shell("/bin/sh").unwrap();
+        assert!(session.is_running());
+
+        session.write(b"echo hello\n").unwrap();
+
+        let mut buf = [0u8; 1024];
+        let n = session.read(&mut buf).unwrap();
+        assert!(n > 0);
+
+        session.close().unwrap();
+        assert!(!session.is_running());
     }
 }
