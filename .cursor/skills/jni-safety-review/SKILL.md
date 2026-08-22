@@ -1,4 +1,9 @@
-# Skill: JNI safety review
+---
+name: "jni-safety-review"
+description: "Safety review checklist for any change touching android_jni.rs, jni_safe.rs, or vfs/android_saf.rs. Use before merging JNI-boundary changes, since mistakes there crash the whole app instead of returning an error."
+icon: "shield"
+color: "orange"
+---
 
 Use this before merging any change that touches `android_jni.rs`,
 `jni_safe.rs`, or `vfs/android_saf.rs` — this is the highest-consequence

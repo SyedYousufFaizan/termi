@@ -1,4 +1,9 @@
-# Skill: Add a new VFS provider (e.g. Phase 2's SSH remote provider)
+---
+name: "add-vfs-provider"
+description: "Worked example for adding a new VFS/FsProvider backend (e.g. an SSH remote provider for Phase 2), including how to register it with VfsService and write a test double. Use when adding or reviewing a new storage backend."
+icon: "git-branch"
+color: "blue"
+---
 
 Worked example based on how `InternalProvider` and the test-only
 `MockSafProvider` are structured. Follow this shape for any new storage

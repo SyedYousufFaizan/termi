@@ -1,4 +1,9 @@
-# Skill: Debug a Rust panic or test failure
+---
+name: "debug-rust-panic"
+description: "Structured checklist for debugging a Rust panic or failing cargo test in the Termi core (poisoned mutexes, VFS capability blocks, JNI-only failures). Use whenever a cargo test fails or a panic message shows up."
+icon: "bug"
+color: "red"
+---
 
 Use this checklist whenever a `cargo test` run fails, a panic message
 shows up in logs, or behavior doesn't match what a test expects.

@@ -34,7 +34,7 @@ When something fails (test failure, panic, unexpected behavior):
    have been caught by `clippy::unwrap_used` — if clippy didn't catch it,
    that's itself a bug in the lint coverage (e.g. missing
    `#[warn(clippy::unwrap_used)]` somewhere) worth flagging.
-4. See `.cursor/skills/debug-rust-panic.md` for a structured checklist.
+4. See `.cursor/skills/debug-rust-panic/SKILL.md` for a structured checklist.
 
 ## Never do this
 

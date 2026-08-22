@@ -1,4 +1,9 @@
-# Skill: Run the full test/lint suite and fix what's red
+---
+name: "run-tests-and-fix"
+description: "Full test/lint workflow matching CI exactly (cargo fmt, test, clippy with unwrap_used enforced, android feature check). Use when asked to test and fix issues, or after any non-trivial change."
+icon: "terminal"
+color: "green"
+---
 
 This is the "make sure everything is actually green" playbook — run this
 after any non-trivial change, or when asked to "test and fix issues."
@@ -35,7 +40,7 @@ with any standard Rust install and should always be run regardless.
 
 ## If something fails
 
-- Test failure → see `.cursor/skills/debug-rust-panic.md`.
+- Test failure → see `.cursor/skills/debug-rust-panic/SKILL.md`.
 - Clippy failure on `unwrap_used`/`expect_used` → replace with proper
   error propagation (`?` + the relevant `*Error` enum in `utils/error.rs`)
   or `LockExt::lock_safe()` for mutex locks. Don't `#[allow(...)]` your way

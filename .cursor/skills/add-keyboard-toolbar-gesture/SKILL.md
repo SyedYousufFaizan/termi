@@ -1,4 +1,9 @@
-# Skill: Add swipe-based history cycling + sticky-Ctrl to CommandToolbar
+---
+name: "add-keyboard-toolbar-gesture"
+description: "Worked example for adding sticky-Ctrl modifier and swipe-based history cycling to CommandToolbar.kt. Use when implementing the remaining Phase 1c keyboard UX items."
+icon: "code"
+color: "blue"
+---
 
 This is the Phase 1c "cheapest, highest-visibility win" item — pure
 Compose UI, no Rust changes needed. `CommandToolbar.kt` already has

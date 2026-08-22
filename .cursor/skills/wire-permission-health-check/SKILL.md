@@ -1,4 +1,9 @@
-# Skill: Wire up the SAF permission health-check (Rust ↔ Kotlin)
+---
+name: "wire-permission-health-check"
+description: "Walkthrough for connecting the Rust PermissionProbe trait (vfs/health.rs) to a real Android-side SAF permission check via JNI. Use when implementing the Kotlin side of the Phase 1d permission health-check feature."
+icon: "link"
+color: "purple"
+---
 
 The Rust-side state machine is fully implemented and tested
 (`rust/src/vfs/health.rs` — `PermissionState`, `PermissionProbe` trait,

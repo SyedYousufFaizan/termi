@@ -1,4 +1,9 @@
-# Skill: Audit `.unwrap()`/`.expect()` calls
+---
+name: "audit-unwraps"
+description: "Methodology for finding and fixing .unwrap()/.expect() calls in production code paths, distinguishing them from acceptable test-code usage. Use for periodic safety sweeps or when clippy::unwrap_used flags something unclear."
+icon: "beaker"
+color: "red"
+---
 
 Use this if `clippy::unwrap_used` flags something and it's not obvious how
 to fix it, or when doing a periodic safety sweep.

@@ -65,7 +65,7 @@ logic host-testable while gating actual `JNIEnv` calls.
    `vfs::service`'s test module — see `MockSafProvider` there for the
    pattern. This is what makes capability-blocking behavior testable
    without needing the real backend.
-5. See `.cursor/skills/add-vfs-provider.md` for a full worked example.
+5. See `.cursor/skills/add-vfs-provider/SKILL.md` for a full worked example.
 
 ## Panic policy
 
@@ -78,5 +78,5 @@ production-style error handling to test assertions.
 If you're tempted to add `.unwrap()` to make something compile: stop, and
 either propagate a `VfsError`/`PtyError`/`TermiError` via `?`, or use
 `LockExt::lock_safe()` if it's a mutex lock. See
-`.cursor/skills/audit-unwraps.md` if you find a case that doesn't fit
+`.cursor/skills/audit-unwraps/SKILL.md` if you find a case that doesn't fit
 either pattern.

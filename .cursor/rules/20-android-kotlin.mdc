@@ -40,7 +40,7 @@ wrapper pattern, before Kotlin can call it.
   TODO block already in that file.
 - `CommandToolbar.kt` — Esc/Home/End buttons added; still needs sticky-Ctrl
   modifier and swipe-based history cycling. See the TODO block in that
-  file and `.cursor/skills/add-keyboard-toolbar-gesture.md`.
+  file and `.cursor/skills/add-keyboard-toolbar-gesture/SKILL.md`.
 - Package manager UI has no corresponding Kotlin screen yet — Rust-side
   `package/manager.rs` and `package/repository.rs` are scaffolding only.
 
