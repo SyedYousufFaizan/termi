@@ -49,7 +49,12 @@ class SessionManager(
                 val handle = TerminalEngine.createSession(sessionId).getOrThrow()
                 
                 // Spawn shell in the app's files dir (writable; "/" is not)
-                val cwd = checkpointDir.parent ?: checkpointDir.absolutePath
+                val filesDir = checkpointDir.parentFile ?: checkpointDir
+                val home = File(filesDir, "home")
+                if (!home.isDirectory && !home.mkdirs()) {
+                    Timber.e("Could not create shell home dir: $home")
+                }
+                val cwd = if (home.isDirectory) home.absolutePath else filesDir.absolutePath
                 TerminalEngine.spawnShell(handle, shellPath, cwd).getOrThrow()
                 
                 // Create session wrapper

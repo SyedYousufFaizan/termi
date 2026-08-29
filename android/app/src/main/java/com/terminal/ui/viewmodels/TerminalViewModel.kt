@@ -36,6 +36,10 @@ class TerminalViewModel(application: Application) : AndroidViewModel(application
     
     /** Partial line buffer for incomplete UTF-8 sequences */
     private var partialLine = StringBuilder()
+    /** Last [outputBuffer] row is a live prompt, not a committed line. */
+    private var hasOpenLine = false
+    /** Chunk ended with CR; next chunk may complete a CRLF pair. */
+    private var pendingCr = false
     
     init {
         val checkpointDir = File(application.filesDir, "checkpoints")
@@ -55,7 +59,12 @@ class TerminalViewModel(application: Application) : AndroidViewModel(application
             sessionManager.createSession()
                 .onSuccess { session ->
                     currentSession = session
-                    
+                    synchronized(outputBuffer) {
+                        hasOpenLine = false
+                        pendingCr = false
+                        partialLine.clear()
+                    }
+
                     // Update UI state
                     _uiState.update { 
                         it.copy(
@@ -141,6 +150,8 @@ class TerminalViewModel(application: Application) : AndroidViewModel(application
             addOutputLine("Executed: $command (Mock)")
             return
         }
+
+        addOutputLine("$ $command")
         
         viewModelScope.launch(Dispatchers.IO) {
             sessionManager.writeCommand(session.id, command)
@@ -205,88 +216,132 @@ class TerminalViewModel(application: Application) : AndroidViewModel(application
     
     /**
      * Process raw output bytes into display lines.
+     *
+     * Prompts have no trailing newline. The old path always *replaced* the
+     * last buffer row with that prompt, which ate one-line commands
+     * (`echo hello`) while leaving multi-line `ps` mostly visible.
      */
     private fun processOutput(data: ByteArray) {
-        // Decode UTF-8 (handle partial sequences)
         val text = try {
             String(data, Charsets.UTF_8)
         } catch (e: Exception) {
-            // Fall back to ASCII if UTF-8 fails
             String(data, Charsets.US_ASCII)
         }
-        
-        // Process each character
-        for (char in text) {
-            when (char) {
-                '\n' -> {
-                    // End of line - flush partial buffer
-                    addOutputLine(partialLine.toString())
-                    partialLine.clear()
-                }
-                '\r' -> {
-                    // Carriage return - ignore or handle for overwrite
-                }
-                '\t' -> {
-                    // Tab - expand to spaces
-                    partialLine.append("    ")
-                }
-                else -> {
-                    // Regular character
-                    if (char.code >= 32 || char == '\u001b') {
-                        partialLine.append(char)
-                    }
+
+        synchronized(outputBuffer) {
+            val chars = text.toCharArray()
+            var i = 0
+            if (pendingCr) {
+                pendingCr = false
+                if (chars.isEmpty() || chars[0] != '\n') {
+                    restartOpenLine()
                 }
             }
+            while (i < chars.size) {
+                when (val char = chars[i]) {
+                    '\n' -> {
+                        commitLine(partialLine.toString())
+                        partialLine.clear()
+                    }
+                    '\r' -> {
+                        // PTY ONLCR turns NL into CR-LF. Treat CRLF as one
+                        // newline. A lone CR (or CR split across reads) is
+                        // "overwrite this line" — the old code always did
+                        // that, which deleted `echo`/`mkdir` output.
+                        if (i + 1 < chars.size && chars[i + 1] == '\n') {
+                            // skip; \n handles commit
+                        } else if (i + 1 == chars.size) {
+                            pendingCr = true
+                        } else {
+                            restartOpenLine()
+                        }
+                    }
+                    '\t' -> partialLine.append("    ")
+                    else -> {
+                        if (char.code >= 32 || char == '\u001b') {
+                            partialLine.append(char)
+                        }
+                    }
+                }
+                i++
+            }
+            if (partialLine.isNotEmpty()) {
+                showOpenLine(partialLine.toString())
+            }
+            publishLinesLocked()
         }
-        
-        // If partial line has content, show it (for prompts without newline)
-        if (partialLine.isNotEmpty()) {
-            updateLastLine(partialLine.toString())
-        }
-        
-        // Update session state
+
         currentSession?.let { session ->
             _uiState.update { it.copy(sessionState = session.stateString) }
         }
     }
-    
+
     /**
-     * Add a line to the output buffer.
+     * Add a completed line (welcome text, "[Session closed]"). Inserts
+     * above an in-progress prompt so we don't bury it.
      */
     private fun addOutputLine(line: String) {
         synchronized(outputBuffer) {
-            outputBuffer.add(stripAnsiCodes(line))
-            
-            // Trim buffer if too large
-            while (outputBuffer.size > maxBufferLines) {
-                outputBuffer.removeAt(0)
+            val cleaned = stripAnsiCodes(line)
+            if (hasOpenLine && outputBuffer.isNotEmpty()) {
+                outputBuffer.add(outputBuffer.size - 1, cleaned)
+            } else {
+                outputBuffer.add(cleaned)
             }
-            
-            _uiState.update { it.copy(outputLines = outputBuffer.toList()) }
+            trimBufferLocked()
+            publishLinesLocked()
         }
     }
-    
-    /**
-     * Update the last line (for prompts).
-     */
-    private fun updateLastLine(line: String) {
-        synchronized(outputBuffer) {
-            if (outputBuffer.isNotEmpty()) {
-                outputBuffer[outputBuffer.size - 1] = stripAnsiCodes(line)
-            } else {
-                outputBuffer.add(stripAnsiCodes(line))
-            }
-            
-            _uiState.update { it.copy(outputLines = outputBuffer.toList()) }
+
+    private fun commitLine(line: String) {
+        val cleaned = stripAnsiCodes(line)
+        if (hasOpenLine && outputBuffer.isNotEmpty()) {
+            outputBuffer[outputBuffer.size - 1] = cleaned
+            hasOpenLine = false
+        } else {
+            outputBuffer.add(cleaned)
         }
+        trimBufferLocked()
+    }
+
+    private fun showOpenLine(line: String) {
+        val cleaned = stripAnsiCodes(line)
+        if (hasOpenLine && outputBuffer.isNotEmpty()) {
+            outputBuffer[outputBuffer.size - 1] = cleaned
+        } else {
+            outputBuffer.add(cleaned)
+            hasOpenLine = true
+        }
+        trimBufferLocked()
+    }
+
+    private fun trimBufferLocked() {
+        while (outputBuffer.size > maxBufferLines) {
+            outputBuffer.removeAt(0)
+        }
+    }
+
+    private fun publishLinesLocked() {
+        _uiState.update { it.copy(outputLines = outputBuffer.toList()) }
     }
     
     /**
      * Strip ANSI escape codes for display.
      * TODO: Parse and render colors properly in future
      */
+    private fun restartOpenLine() {
+        partialLine.clear()
+        if (hasOpenLine && outputBuffer.isNotEmpty()) {
+            outputBuffer[outputBuffer.size - 1] = ""
+        }
+    }
+
     private fun stripAnsiCodes(text: String): String {
-        return text.replace(Regex("\u001b\\[[0-9;]*[A-Za-z]"), "")
+        return text
+            .replace(Regex("\u001B\\][^\u0007\u001B]*(?:\u0007|\u001B\\\\)"), "")
+            .replace(Regex("\u001B\\[[?][0-9;]*[A-Za-z]"), "")
+            .replace(Regex("\u001B\\[[0-9;]*[A-Za-z]"), "")
+            .replace(Regex("\u001B."), "")
     }
     
     override fun onCleared() {

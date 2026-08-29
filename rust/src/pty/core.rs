@@ -123,17 +123,29 @@ impl PtySession {
 
         let writer = self.writer.as_mut().ok_or(PtyError::NotInitialized)?;
 
-        let written = writer.write(data).map_err(|e| {
-            error!("PTY write failed: {}", e);
-            PtyError::WriteFailed(e.to_string())
-        })?;
+        let mut written = 0;
+        while written < data.len() {
+            match writer.write(&data[written..]) {
+                Ok(0) => {
+                    return Err(PtyError::WriteFailed(
+                        "PTY write returned 0 (peer closed)".into(),
+                    ));
+                }
+                Ok(n) => written += n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    error!("PTY write failed: {e}");
+                    return Err(PtyError::WriteFailed(e.to_string()));
+                }
+            }
+        }
 
         writer.flush().map_err(|e| {
-            warn!("PTY flush failed: {}", e);
+            warn!("PTY flush failed: {e}");
             PtyError::WriteFailed(e.to_string())
         })?;
 
-        debug!("PTY write: {} bytes", written);
+        debug!("PTY write: {written} bytes");
         Ok(written)
     }
 

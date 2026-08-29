@@ -9,7 +9,7 @@
 
 use crate::utils::error::{PtyError, PtyResult};
 use log::{info, warn};
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
@@ -102,9 +102,15 @@ fn configure_command(cmd: &mut Command, cwd: Option<&str>) {
     cmd.env("COLORTERM", "truecolor");
     cmd.env("LANG", "en_US.UTF-8");
     if let Some(dir) = cwd {
+        // Best-effort: glibc posix_spawn honors this. Bionic often does
+        // not (`addchdir` is missing on older API), so we also `chdir` in
+        // `pre_exec`. Do **not** export a fake `PWD` — mksh `pwd` defaults
+        // to logical `$PWD`, which made mkdir look like it ran in the app
+        // files dir while getcwd was still `/`.
         cmd.current_dir(dir);
         cmd.env("HOME", dir);
-        cmd.env("PWD", dir);
+        cmd.env("ENV", "/dev/null");
+        cmd.env("PS1", "\\$ ");
     }
     #[cfg(target_os = "android")]
     {
@@ -125,25 +131,60 @@ fn spawn_login_tty(program: &str, cwd: Option<&str>, slave_fd: RawFd) -> io::Res
     cmd.stdout(Stdio::null());
     cmd.stderr(Stdio::null());
 
+    let dir_c = optional_cstring(cwd)?;
     // SAFETY: `slave_fd` stays live in the parent `File` until after spawn.
-    // pre_exec runs in the child between fork and exec.
+    // pre_exec runs in the child between fork and exec. `chdir` is
+    // async-signal-safe.
     unsafe {
-        cmd.pre_exec(move || setup_child_tty(slave_fd));
+        cmd.pre_exec(move || {
+            if let Some(ref d) = dir_c {
+                chdir_cstring(d)?;
+            }
+            setup_child_tty(slave_fd)
+        });
     }
 
     cmd.spawn()
 }
 
-/// Attach cloned slave fds as stdin/stdout/stderr. No `pre_exec`, so Android
-/// can use `posix_spawn` instead of `fork`. Ctrl+C via the kernel may not
-/// work without a controlling tty; the toolbar can still write 0x03.
+/// Attach cloned slave fds as stdin/stdout/stderr.
+///
+/// `pre_exec` is used only when a cwd is set, so `chdir` actually happens
+/// on Android (bionic `posix_spawn` commonly ignores `Command::current_dir`).
 fn spawn_slave_stdio(program: &str, cwd: Option<&str>, slave: &File) -> io::Result<Child> {
     let mut cmd = Command::new(program);
     configure_command(&mut cmd, cwd);
     cmd.stdin(Stdio::from(slave.try_clone()?));
     cmd.stdout(Stdio::from(slave.try_clone()?));
     cmd.stderr(Stdio::from(slave.try_clone()?));
+
+    if let Some(d) = optional_cstring(cwd)? {
+        unsafe {
+            cmd.pre_exec(move || chdir_cstring(&d));
+        }
+    }
+
     cmd.spawn()
+}
+
+fn optional_cstring(s: Option<&str>) -> io::Result<Option<CString>> {
+    match s {
+        None => Ok(None),
+        Some(s) => CString::new(s).map(Some).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "working directory contains an interior NUL",
+            )
+        }),
+    }
+}
+
+fn chdir_cstring(dir: &CString) -> io::Result<()> {
+    if unsafe { libc::chdir(dir.as_ptr()) } != 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 fn open_pty_pair(size: PtySize) -> PtyResult<(File, File)> {
@@ -414,5 +455,52 @@ mod tests {
             status.success(),
             "spawned {prog} via PTY but it failed: {status:?}"
         );
+    }
+
+    #[test]
+    fn test_spawn_chdir_is_real_not_just_pwd_env() {
+        use std::io::Read;
+        let prog = ["/usr/bin/pwd", "/bin/pwd"]
+            .iter()
+            .copied()
+            .find(|p| std::path::Path::new(p).exists());
+        let Some(prog) = prog else {
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!("termi_cwd_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let want = dir.canonicalize().unwrap();
+        let want_str = want.to_str().unwrap();
+        let (master, mut child) = spawn_on_pty(prog, PtySize::default(), Some(want_str)).unwrap();
+        let mut reader = master.try_clone_reader().unwrap();
+        let mut buf = Vec::new();
+        let mut tmp = [0u8; 256];
+        for _ in 0..40 {
+            if poll_in(reader.as_raw_fd(), 50).unwrap_or(false) {
+                match reader.read(&mut tmp) {
+                    Ok(0) => break,
+                    Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                    // Slave hangup after pwd exits is EIO on the master.
+                    Err(e) if e.raw_os_error() == Some(5) => break,
+                    Err(e) => panic!("read pwd output: {e}"),
+                }
+            }
+            if child.try_wait().unwrap().is_some() {
+                break;
+            }
+        }
+        let status = child.wait().unwrap();
+        assert!(status.success(), "{prog} via PTY failed: {status:?}");
+        let got = String::from_utf8_lossy(&buf);
+        let line = got
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with('/'))
+            .unwrap_or(got.trim());
+        assert_eq!(
+            line, want_str,
+            "child getcwd must match requested cwd (not a fake PWD env); output={got:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
