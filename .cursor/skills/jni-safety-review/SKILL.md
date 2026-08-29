@@ -26,7 +26,10 @@ returning an error.
       existing pattern before adding a new export).
 - [ ] Handles crossing the boundary go through `jni_safe::handle_box`/
       `handle_to_ptr`/`handle_to_ref`/`handle_to_mut`/`handle_drop` — never
-      a raw pointer cast.
+      a raw pointer cast. Handles are **opaque positive IDs**, not
+      `Box::into_raw as i64`. Kotlin must not use `handle > 0` as the only
+      check if an old .so might still return tagged pointers; error codes
+      are only `-1..-99`. See `ErrorCode.isValidHandle`.
 - [ ] New JNI-crate-dependent code (anything using `JNIEnv`, `JObject`,
       `JString`, etc.) is behind `#[cfg(feature = "android")]`. Verify with:
       ```bash

@@ -83,7 +83,7 @@ class TerminalViewModel(application: Application) : AndroidViewModel(application
                     _uiState.update { 
                         it.copy(
                             isLoading = false,
-                            error = "Failed to create session: ${e.message}"
+                            error = e.message ?: "Failed to create session"
                         )
                     }
                 }

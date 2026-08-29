@@ -33,7 +33,18 @@ object TerminalEngine {
         const val UNKNOWN = -99
         
         fun isError(code: Int): Boolean = code < 0
-        
+
+        /**
+         * JNI error codes occupy [-99, -1]. A raw heap pointer can look
+         * negative as a signed Long (Android pointer tags); that is still
+         * a valid handle if the .so still ships pointers. Opaque IDs from
+         * the Rust handle table are always > 0.
+         */
+        fun isValidHandle(handle: Long): Boolean {
+            if (handle == 0L) return false
+            return handle !in UNKNOWN.toLong()..-1L
+        }
+
         fun describe(code: Int): String = when (code) {
             SUCCESS -> "Success"
             NULL_POINTER -> "Null pointer"
@@ -47,6 +58,13 @@ object TerminalEngine {
             IO_ERROR -> "I/O error"
             UNKNOWN -> "Unknown error"
             else -> "Error code: $code"
+        }
+
+        fun describeKnown(code: Int): String? = when (code) {
+            NULL_POINTER, INVALID_HANDLE, JAVA_EXCEPTION, INVALID_UTF8,
+            INVALID_ARGUMENT, OUT_OF_MEMORY, PTY_ERROR, VFS_ERROR, IO_ERROR,
+            UNKNOWN -> describe(code)
+            else -> null
         }
     }
     
@@ -141,7 +159,7 @@ object TerminalEngine {
 
         return try {
             val handle = nativeCreateSession(sessionId)
-            if (handle > 0) {
+            if (ErrorCode.isValidHandle(handle)) {
                 Timber.d("Created session '$sessionId' with handle $handle")
                 Result.success(handle)
             } else {
@@ -367,7 +385,7 @@ object TerminalEngine {
         if (!isLoaded) return Result.success(999L)
 
         val handle = nativeRestore(sessionId, checkpointDir)
-        return if (handle > 0) {
+        return if (ErrorCode.isValidHandle(handle)) {
             Timber.d("Restored session '$sessionId' with handle $handle")
             Result.success(handle)
         } else {
@@ -446,4 +464,6 @@ object TerminalEngine {
 class TerminalException(
     val errorCode: Int,
     message: String
-) : Exception("$message: ${TerminalEngine.ErrorCode.describe(errorCode)}")
+) : Exception(
+    TerminalEngine.ErrorCode.describeKnown(errorCode)?.let { "$message: $it" } ?: message
+)

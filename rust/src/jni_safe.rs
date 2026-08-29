@@ -27,8 +27,11 @@
 
 #![allow(dead_code)]
 
+use crate::utils::sync_ext::LockExt;
 use log::{error, warn};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 /// Error codes returned to Kotlin (never panic across FFI)
 #[repr(i32)]
@@ -287,34 +290,84 @@ pub fn safe_new_string<'a>(env: &mut JNIEnv<'a>, s: &str) -> JniResult<JString<'
     })
 }
 
-/// Safely convert a jlong handle to a pointer
+/// Opaque session handles passed to Kotlin.
+///
+/// These are **small positive IDs**, not raw pointers. Passing
+/// `Box::into_raw as i64` across JNI looks like a failure on Android:
+/// heap pointers can have the top byte tagged (TBI/MTE), so they are
+/// negative as a signed `jlong`. Kotlin then does `if (handle > 0)` and
+/// reports `Error code: <low 32 bits>` — which is how
+/// `-1905618432` showed up as "failed to create session" even though
+/// `PtySession::new` succeeded.
+struct HandleTable {
+    next_id: i64,
+    /// ID → boxed value address. Stored as `usize` so the mutex is `Send`.
+    entries: HashMap<i64, usize>,
+}
+
+fn handle_table() -> &'static Mutex<HandleTable> {
+    static TABLE: OnceLock<Mutex<HandleTable>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        Mutex::new(HandleTable {
+            next_id: 1,
+            entries: HashMap::new(),
+        })
+    })
+}
+
+fn register_ptr(ptr: usize) -> i64 {
+    if ptr == 0 {
+        return 0;
+    }
+    let mut table = handle_table().lock_safe();
+    loop {
+        let id = table.next_id;
+        table.next_id = match id.checked_add(1) {
+            Some(n) if n > 0 => n,
+            _ => 1,
+        };
+        if id <= 0 || table.entries.contains_key(&id) {
+            continue;
+        }
+        table.entries.insert(id, ptr);
+        return id;
+    }
+}
+
+/// Look up a handle ID. Error codes and unknown IDs fail closed.
 ///
 /// Uses plain `i64` rather than `jni::sys::jlong` so this function has zero
 /// dependency on the `jni` crate — `jlong` is a type alias for `i64` anyway,
 /// so this is a no-op change at the JNI boundary but lets this file compile
 /// and unit-test on host without the `android` feature enabled.
-///
-/// CRITICAL: Always validate handles before dereferencing
 pub fn handle_to_ptr<T>(handle: i64) -> JniResult<*mut T> {
-    if handle == 0 {
-        error!("Invalid handle: null pointer");
+    if handle <= 0 {
+        error!("Invalid handle: {handle}");
         return Err(JniErrorCode::InvalidHandle);
     }
 
-    let ptr = handle as *mut T;
+    let addr = {
+        let table = handle_table().lock_safe();
+        match table.entries.get(&handle).copied() {
+            Some(a) => a,
+            None => {
+                error!("Invalid handle: {handle} is not registered");
+                return Err(JniErrorCode::InvalidHandle);
+            }
+        }
+    };
 
-    // We can't fully validate the pointer, but we can check alignment
-    if !(ptr as usize).is_multiple_of(std::mem::align_of::<T>()) {
+    if !addr.is_multiple_of(std::mem::align_of::<T>()) {
         error!("Invalid handle: misaligned pointer");
         return Err(JniErrorCode::InvalidHandle);
     }
 
-    Ok(ptr)
+    Ok(addr as *mut T)
 }
 
-/// Convert a pointer to a jlong handle for passing to Java
+/// Register a pointer and return a positive opaque ID for Java.
 pub fn ptr_to_handle<T>(ptr: *mut T) -> i64 {
-    ptr as i64
+    register_ptr(ptr as usize)
 }
 
 /// Safe wrapper for getting a reference from a handle.
@@ -369,7 +422,19 @@ pub unsafe fn handle_drop<T>(handle: i64) -> JniResult<()> {
         return Ok(());
     }
 
-    let ptr = handle_to_ptr::<T>(handle)?;
+    let ptr = {
+        let mut table = handle_table().lock_safe();
+        let Some(addr) = table.entries.get(&handle).copied() else {
+            error!("handle_drop: {handle} is not registered");
+            return Err(JniErrorCode::InvalidHandle);
+        };
+        if !addr.is_multiple_of(std::mem::align_of::<T>()) {
+            error!("handle_drop: misaligned pointer for {handle}");
+            return Err(JniErrorCode::InvalidHandle);
+        }
+        table.entries.remove(&handle);
+        addr as *mut T
+    };
 
     // SAFETY: Caller guarantees:
     // 1. handle was created by handle_box
@@ -480,15 +545,29 @@ mod tests {
 
     #[test]
     fn test_handle_roundtrip() {
-        let value = Box::new(42i32);
-        let handle = ptr_to_handle(Box::into_raw(value));
-        assert!(handle != 0);
+        let handle = handle_box(42i32);
+        // Must be a small positive ID so Kotlin `handle > 0` accepts it.
+        // Raw heap pointers can be negative as i64 on Android (TBI/MTE).
+        assert!(handle > 0);
+        assert!(handle < 10_000);
 
         unsafe {
             let ptr = handle_to_ptr::<i32>(handle).unwrap();
             assert_eq!(*ptr, 42);
-            let _ = Box::from_raw(ptr); // Clean up
+            handle_drop::<i32>(handle).unwrap();
         }
+    }
+
+    #[test]
+    fn test_tagged_pointer_bits_are_not_handles() {
+        // The on-device banner "Error code: -1905618432" was the low 32
+        // bits of a heap pointer that Kotlin truncated after rejecting
+        // handle > 0. Those bits must never look up as a live session.
+        assert_eq!(
+            handle_to_ptr::<i32>(-1_905_618_432),
+            Err(JniErrorCode::InvalidHandle)
+        );
+        assert_eq!(handle_to_ptr::<i32>(-7), Err(JniErrorCode::InvalidHandle));
     }
 
     #[test]
@@ -512,7 +591,7 @@ mod tests {
         // test coverage even though they're the primary way session/PTY
         // handles cross the JNI boundary.
         let handle = handle_box(String::from("hello"));
-        assert!(handle != 0);
+        assert!(handle > 0);
 
         unsafe {
             let s: &String = handle_to_ref(handle).unwrap();
