@@ -82,7 +82,12 @@ Phase 1 related. Key changes since this file was originally written:
 - **Test commands**: `cd rust && cargo test` now runs with NO flags and
   needs no Android SDK/NDK (default Cargo features are intentionally
   empty). Use `cargo check --features android --all-targets` to verify
-  the JNI boundary type-checks.
+  the JNI boundary type-checks on the **host**. That is **not** enough
+  for PTY/ioctl code: also run
+  `cargo check --target aarch64-linux-android --features android --lib`
+  (`rustup target add aarch64-linux-android`; no NDK required). Host
+  libc and bionic disagree on ioctl request types and which TIOC*
+  constants exist.
 - **`clippy::unwrap_used`/`clippy::expect_used` are enforced in CI as hard
   errors**, not just a style preference — see
   `.cursor/rules/30-safety-and-testing.mdc`.

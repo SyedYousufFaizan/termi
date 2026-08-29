@@ -46,5 +46,8 @@ When something fails (test failure, panic, unexpected behavior):
 - Never claim a feature is "complete" if it's gated behind
   `#[cfg(feature = "android")]` and you've only run `cargo check`, not an
   actual on-device test — check compiles, it doesn't verify behavior.
+- Never treat host `cargo check --features android` as an Android compile.
+  That still uses host libc. PTY/ioctl code must also pass
+  `cargo check --target aarch64-linux-android --features android --lib`.
 - Never quietly widen scope into Phase 2/3 roadmap items while fixing a
   Phase 1 bug — flag it as a separate suggestion instead.

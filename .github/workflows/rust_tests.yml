@@ -73,6 +73,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+          targets: aarch64-linux-android
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -84,13 +85,24 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-android-
 
-      - name: Type-check android feature
+      - name: Type-check android feature (host libc — JNI signatures)
         working-directory: rust
         run: cargo check --features android --all-targets
+
+      # Host `--features android` still uses *host* libc. ioctl request types
+      # and missing constants (TIOCGPTN) only show up on the Android target.
+      # This step needs no NDK: cargo check does not link.
+      - name: Type-check for aarch64-linux-android
+        working-directory: rust
+        run: cargo check --target aarch64-linux-android --features android --lib
 
       - name: Clippy android feature
         working-directory: rust
         run: cargo clippy --features android --all-targets -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+
+      - name: Clippy for aarch64-linux-android
+        working-directory: rust
+        run: cargo clippy --target aarch64-linux-android --features android --lib -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
 
   # Real cross-compilation to an actual Android target via the NDK. This is
   # the closest this CI gets to "does it work on a phone" without a device

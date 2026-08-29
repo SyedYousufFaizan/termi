@@ -172,6 +172,25 @@ fn open_pty_pair(size: PtySize) -> PtyResult<(File, File)> {
     Ok((master, slave))
 }
 
+/// bionic's `ioctl` request is `c_int`; glibc's is `c_ulong`. Host
+/// `cargo check --features android` uses the host libc and will not catch
+/// this — always also check `--target aarch64-linux-android`.
+#[cfg(target_os = "android")]
+type IoctlReq = libc::c_int;
+#[cfg(not(target_os = "android"))]
+type IoctlReq = libc::c_ulong;
+
+/// asm-generic ioctl numbers (same on Linux and Android).
+/// TIOCGPTN is not exported by `libc` for `target_os = "android"`.
+const TIOCSCTTY: IoctlReq = 0x540E as IoctlReq;
+const TIOCSWINSZ: IoctlReq = 0x5414 as IoctlReq;
+/// `_IOR('T', 0x30, unsigned int)` — bit 31 is set, so the Android
+/// `c_int` request is negative. Cast from `u32` to avoid
+/// `overflowing_literals` on `target_os = "android"`.
+const TIOCGPTN: IoctlReq = 0x8004_5430u32 as IoctlReq;
+/// `_IO('T', 0x41)` — open slave from master without `/dev/pts`
+const TIOCGPTPEER: IoctlReq = 0x5441 as IoctlReq;
+
 fn open_ptmx() -> PtyResult<File> {
     let fd = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC) };
     if fd >= 0 {
@@ -189,10 +208,6 @@ fn open_ptmx() -> PtyResult<File> {
             ))
         })
 }
-
-/// TIOCGPTPEER: `_IO('T', 0x41)` — open the slave from the master fd without
-/// walking `/dev/pts`, which is where Android SELinux often denies us.
-const TIOCGPTPEER: libc::c_ulong = 0x5441;
 
 fn open_slave(master_fd: RawFd) -> PtyResult<File> {
     let flags = libc::O_RDWR | libc::O_NOCTTY;
@@ -229,7 +244,7 @@ fn open_slave(master_fd: RawFd) -> PtyResult<File> {
 
 fn pty_index(master_fd: RawFd) -> PtyResult<u32> {
     let mut n: libc::c_uint = 0;
-    let rc = unsafe { libc::ioctl(master_fd, libc::TIOCGPTN, &mut n) };
+    let rc = unsafe { libc::ioctl(master_fd, TIOCGPTN, &mut n) };
     if rc != 0 {
         return Err(PtyError::SpawnFailed(format!(
             "TIOCGPTN failed: {}",
@@ -262,7 +277,7 @@ fn set_winsize(fd: RawFd, size: PtySize) -> PtyResult<()> {
         ws_xpixel: size.pixel_width,
         ws_ypixel: size.pixel_height,
     };
-    let rc = unsafe { libc::ioctl(fd, libc::TIOCSWINSZ, &ws) };
+    let rc = unsafe { libc::ioctl(fd, TIOCSWINSZ, &ws) };
     if rc != 0 {
         return Err(PtyError::ResizeFailed(format!(
             "TIOCSWINSZ failed: {}",
@@ -277,7 +292,7 @@ fn set_winsize(fd: RawFd, size: PtySize) -> PtyResult<()> {
 /// Only async-signal-safe calls here — no `log`, no malloc-heavy formatting.
 fn setup_child_tty(slave_fd: RawFd) -> io::Result<()> {
     let _ = unsafe { libc::setsid() };
-    let _ = unsafe { libc::ioctl(slave_fd, libc::TIOCSCTTY, 0) };
+    let _ = unsafe { libc::ioctl(slave_fd, TIOCSCTTY, 0) };
     if unsafe { libc::dup2(slave_fd, 0) } < 0 {
         return Err(io::Error::last_os_error());
     }

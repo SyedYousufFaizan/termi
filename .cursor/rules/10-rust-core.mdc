@@ -16,6 +16,11 @@ cd rust && cargo test
 # (it won't *run* here, but a signature drift should be caught):
 cd rust && cargo check --features android --all-targets
 
+# Host `--features android` still uses *host* libc. ioctl request types
+# and missing constants (TIOCGPTN) only fail on the Android target.
+# Needs `rustup target add aarch64-linux-android`. No NDK required.
+cd rust && cargo check --target aarch64-linux-android --features android --lib
+
 # Full lint pass matching CI exactly:
 cd rust && cargo clippy --all-targets -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
 cd rust && cargo clippy --features android -- -D warnings -D clippy::unwrap_used -D clippy::expect_used

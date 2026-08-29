@@ -112,7 +112,8 @@ health-check) automatically. Start here regardless of tooling:
 ```bash
 cd rust
 cargo test                                    # fast, no Android SDK/NDK needed
-cargo check --features android --all-targets  # type-checks the JNI boundary
+cargo check --features android --all-targets  # JNI boundary (host libc)
+cargo check --target aarch64-linux-android --features android --lib  # bionic ioctl types
 ```
 
 See `.cursor/rules/00-project-overview.mdc` for the full picture.

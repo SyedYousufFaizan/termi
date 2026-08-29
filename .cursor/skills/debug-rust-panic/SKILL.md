@@ -66,6 +66,7 @@ VFS work follows this pattern throughout — every `VfsOutcome` variant
 ```bash
 cd rust && cargo test
 cd rust && cargo check --features android --all-targets
+cd rust && cargo check --target aarch64-linux-android --features android --lib
 ```
 
 Both should be clean before considering the fix complete.

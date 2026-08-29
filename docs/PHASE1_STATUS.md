@@ -133,7 +133,8 @@ screen is not what the Compose UI shows until that is connected.
 ```bash
 cd rust
 cargo test                                  # 80 passed (77 lib + 3 integration placeholders), 0 failed, 1 ignored
-cargo check --features android --all-targets  # type-checks clean, including nativeRestore
+cargo check --features android --all-targets  # type-checks JNI on host libc
+cargo check --target aarch64-linux-android --features android --lib  # bionic ioctl types
 cargo clippy --all-targets -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
 cargo clippy --features android -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
 cargo build --release

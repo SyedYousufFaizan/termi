@@ -31,10 +31,11 @@ returning an error.
       `JString`, etc.) is behind `#[cfg(feature = "android")]`. Verify with:
       ```bash
       cd rust && cargo check --features android --all-targets
+      cd rust && cargo check --target aarch64-linux-android --features android --lib
       cd rust && cargo build --no-default-features   # must NOT need the jni crate
       ```
-      If the second command fails because it's pulling in `jni`, something
-      new isn't properly feature-gated.
+      If `cargo build --no-default-features` fails because it's pulling in `jni`,
+      something new isn't properly feature-gated.
 - [ ] If this touches `vfs/android_saf.rs`: does the change respect the
       capability system? `SafProvider` should NOT implement
       `chmod`/`symlink` — if you're adding code there that makes those

@@ -27,6 +27,15 @@ cargo clippy --all-targets -- -D warnings -D clippy::unwrap_used -D clippy::expe
 cargo check --features android --all-targets
 cargo clippy --features android -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
 
+# 4b. Android *target* type-check (host `--features android` is not enough:
+#     it still uses host libc. TIOCGPTN / ioctl i32 vs u64 only fail here.)
+#     Needs `rustup target add aarch64-linux-android`. No NDK required.
+if rustup target list --installed | grep -q aarch64-linux-android; then
+  cargo check --target aarch64-linux-android --features android --lib
+else
+  echo "SKIP: aarch64-linux-android target not installed (CI android-feature-check runs this)"
+fi
+
 # 5. Release build sanity check
 cargo build --release
 ```
