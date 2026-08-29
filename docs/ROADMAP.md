@@ -2,11 +2,10 @@
 
 This document tracks development progress and upcoming milestones.
 
-> **Note:** For the current, verified ground-truth status of the Phase 1
-> safety cleanup and VFS capability enforcement work, see
-> [PHASE1_STATUS.md](PHASE1_STATUS.md) — it's updated per-pass with what
-> was actually tested, not just planned. This file describes the overall
-> phased plan; PHASE1_STATUS.md describes what's real right now.
+> **Note:** For what is actually implemented vs scaffolded, including the
+> on-device **output-streaming handoff**, see
+> [PHASE1_STATUS.md](PHASE1_STATUS.md). This file is the phased plan;
+> PHASE1_STATUS.md is ground truth.
 
 ## Project Status
 
@@ -67,47 +66,55 @@ This document tracks development progress and upcoming milestones.
 - ✅ Parser handles colors, cursor movement, clear
 - ✅ Screen buffer with scrollback
 
-### Week 3-4: Kotlin UI + JNI Bindings ✅ COMPLETE
+### Week 3-4: Kotlin UI + JNI Bindings 🔄 IN PROGRESS (on-device)
+
+Scaffolding is in place and a debug APK **does** open a live `/system/bin/sh`.
+That is **not** the same as "output display is done." Ground truth:
+[PHASE1_STATUS.md](PHASE1_STATUS.md) (handoff section).
 
 | Task | Status | Notes |
 |------|--------|-------|
-| JNI exports in Rust | ✅ | `android_jni.rs` - 15+ exports |
-| TerminalEngine.kt JNI bindings | ✅ | Complete with error handling |
-| TerminalApplication.kt | ✅ | Library loading, notifications |
+| JNI exports in Rust | ✅ | `android_jni.rs` |
+| TerminalEngine.kt JNI bindings | ✅ | Error codes + `nativeLastError` |
+| TerminalApplication.kt | ✅ | Library loading |
 | MainActivity.kt | ✅ | Compose entry point |
-| SessionManager.kt | ✅ | Session lifecycle, I/O loop |
-| TerminalService.kt | ✅ | Foreground service w/ checkpointing |
-| TerminalScreen.kt | ✅ | LazyColumn output, input handling |
-| TerminalViewModel.kt | ✅ | State management, output buffering |
+| SessionManager.kt | 🔄 | Lifecycle + I/O loop; read loop must stay on `Dispatchers.IO` |
+| TerminalService.kt | ⚠️ | Declared in the manifest, **never started** |
+| TerminalScreen.kt | 🔄 | Toolbar + command box; not a full tty |
+| TerminalViewModel.kt | 🔄 | **Transcript/streaming bug lives here** |
 | Theme & Colors | ✅ | Dracula-inspired dark theme |
-| SafBridge provider | ✅ | SAF document access |
+| SafBridge provider | ⚠️ | Scaffold only — no real SAF I/O |
 | AndroidManifest.xml | ✅ | Permissions, service declaration |
 
 **Success Criteria:**
-- [x] App opens and shows terminal
-- [x] Session state banner shows
-- [ ] Can execute: ls, pwd, echo, cd (needs device testing)
-- [ ] Output displays with colors (basic stripping implemented)
-- [ ] No crashes on invalid input
+- [x] App opens and shows terminal (on-device)
+- [x] Session can stay Active past ~20s (ANR from blocking `nativeRead` on Main is fixed)
+- [x] ✕ / New, IME, rotate, Home/resume (spot-checked)
+- [x] Toolbar Ctrl+C / Ctrl+D (spot-checked)
+- [ ] Transcript shows one-line commands (`echo`, `ls`, `mkdir` errors) reliably
+- [ ] `pwd -P` matches a writable app dir and `mkdir` is visible via `ls` *and* `adb`
+- [ ] Output displays with colors (native `Screen`, not Kotlin strip)
+- [ ] SessionStateBanner / restore after process death
 - [ ] APK size <10MB
 
 ### Remaining Tasks (Month 1)
 
 | Task | Status | Notes |
 |------|--------|-------|
-| Install Android NDK targets | ⏳ | `rustup target add aarch64-linux-android` |
-| Test ARM64 build | ⏳ | `cargo ndk` build verification |
-| Device testing | ⏳ | Run on actual Android device |
-| ANSI color rendering in UI | ⏳ | Use ColoredTerminalLine component |
+| Compose PTY transcript | 🔄 | **Current handoff** — see PHASE1_STATUS |
+| `cargo check` Android target | ✅ | CI `android-feature-check` includes `aarch64-linux-android` |
+| Device testing | 🔄 | Shell works; streaming still wrong |
+| ANSI color rendering in UI | ⏳ | Use native `Screen` / renderer, not strip-in-ViewModel |
 
 ### Testing Checklist (Month 1)
 
+- [x] App does not die at ~20s idle (was ANR)
 - [ ] Run app for 1 hour without crashes
 - [ ] Send 1000 rapid commands
 - [ ] Try invalid UTF-8 input
 - [ ] Background app → verify checkpoint
 - [ ] Restore app → verify restoration
-- [ ] Check Logcat for JNI errors
+- [ ] Check Logcat for JNI errors vs UI lines on `echo hello`
 
 ---
 

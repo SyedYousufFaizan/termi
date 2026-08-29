@@ -2,6 +2,30 @@
 
 This document explains important limitations of the terminal app that affect how you can use it. Please read this before reporting issues.
 
+For **what is actually implemented vs scaffolded right now**, including the
+on-device output-streaming handoff, see
+[PHASE1_STATUS.md](PHASE1_STATUS.md). This file is about platform
+constraints (SAF, OEMs). Do not use it to claim the Compose transcript
+is finished.
+
+## Current alpha (on-device)
+
+These are product/UI gaps, not SAF theory:
+
+- **PTY output in the UI can lie.** The shell may run `echo` / `ls` /
+  `mkdir` correctly while Compose drops or overwrites lines. Debug the
+  transcript (`TerminalViewModel.processOutput`) before assuming the
+  command failed. Confirm files with `adb` when unsure.
+- **Input is a command box** (IME Send), not a full tty. `vi` / Ctrl+R
+  will not feel like Termux until per-key PTY is wired.
+- **Writable cwd is app-private** (`files/home` after a current rebuild).
+  Folders created there do **not** show up in Downloads or the system
+  Files app. `mkdir /sdcard/...` is expected to fail until SAF is
+  implemented. `pwd` without `-P` used to show a fake `PWD` env while
+  the process was still in `/` — use `pwd -P`.
+- **Foreground service is not started.** Home/resume may keep the
+  session for a while; process death will not restore it.
+
 ## Storage Limitations
 
 ### External Storage (SD Cards, Downloads, etc.)

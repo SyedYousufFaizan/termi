@@ -5,153 +5,191 @@ the README claimed and what was actually built. This file is the
 single source of truth for "is X actually done" — keep it updated as
 Phase 1 progresses, and check it before assuming a feature exists.
 
-Last updated: as of the main-thread PTY-read ANR fix (opaque handles +
-non-blocking `poll` + Kotlin `Dispatchers.IO` read loop). On-device still
-needs a rebuilt APK.
+**Last updated:** 2026-08-29 (on-device handoff). Shell commands run on a
+real phone. **Compose output streaming is still wrong** — that is the
+bug to hand to the next person. Rebuild Kotlin + `libterminal_core.so`
+together (`nativeSpawnShell` takes a cwd argument).
 
-## 1a. Core terminal — parser/screen now attached to the PTY session
+---
 
-- PTY spawn, read/write, ANSI parsing, screen buffer: implemented.
-- **This pass (host-tested):** `PtySession` owns a `TerminalParser` +
-  `Screen`. Every PTY `read` / `read_timeout` (and a public `feed_output`
-  for tests) runs bytes through the parser. `checkpoint()` snapshots the
-  live grid (including scrollback and style spans) into `TerminalState`.
-  `restore_from_disk()` rebuilds the screen from that file. The restored
-  session is **not running** — Android already killed the old shell; the
-  caller must `spawn_shell` if a live PTY is needed. Display state is
-  what "Restored" means.
-- **Session create (host-tested spawn path):** opening the PTY slave tries
-  `TIOCGPTPEER` then `/dev/pts/N`. `grantpt` / `TIOCSWINSZ` failures no
-  longer abort. If login-tty `fork`+`setsid` fails, spawn retries with the
-  slave attached as stdio. JNI now returns the real error string (not just
-  "PTY error"). Kotlin must be rebuilt together with the `.so` (`nativeSpawnShell`
-  gained a `cwd` argument). **On-device "Error code: -1905618432"** was
-  Kotlin treating a tagged heap pointer as a failed `handle > 0` check —
-  `PtySession::new` does not open a PTY and usually succeeds. Handles are
-  now opaque positive IDs. **Main-thread ANR (~20s crash, dead X/IME):**
-  `SessionManager` was constructed with `viewModelScope` (Main) and
-  `nativeRead` blocked on a blocking PTY fd, so the first idle read froze
-  the UI until the OEM ANR watchdog killed the app. Reads now `poll(0)`
-  and the Kotlin loop runs on `Dispatchers.IO`. **Not verified on a device
-  in this environment.**
-- CSI gaps filled on the same path: erase-to-cursor (CSI J/K mode 1) and
-  save/restore cursor (CSI `s`/`u`). Parser mutexes use `lock_safe()`.
-- Checkpoint format version is enforced (`CHECKPOINT_VERSION`); mismatch
-  is a hard error, not a silent load.
-- **JNI:** `nativeCheckpoint` now goes through `PtySession::checkpoint`
-  (so the screen is included). New `nativeRestore(sessionId, dir) -> handle`
-  is exported and has a matching Kotlin `external fun`. **Not run on a
-  device** — `cargo check --features android` only. Kotlin `SessionManager`
-  still does not call `restore()`.
-- **Fixed previously:** 5 `Mutex::lock().unwrap()` calls in
-  `pty/core.rs`'s `read_timeout` path replaced with
-  `utils::sync_ext::LockExt::lock_safe()`.
+## Handoff — read this first
 
-## 1b. Safety cleanup — DONE (Rust core)
+### What is verified on a real device
 
-- Audited all 47 originally-flagged `.unwrap()`/`.expect()` sites. ~42
-  were in test code (fine, idiomatic — no change needed). 5 were genuine
-  production risk (see above) and are fixed.
-- `#![warn(clippy::unwrap_used, clippy::expect_used)]` enforced crate-wide
-  in `lib.rs`; CI (`rust_tests.yml`) runs this as a hard error
-  (`-D clippy::unwrap_used -D clippy::expect_used`), so this can't
-  silently regress.
-- **Architecture fix**: `jni_safe.rs` previously pulled in the `jni` crate
-  unconditionally, meaning the entire crate couldn't compile or test
-  without a full Android NDK toolchain. Split into a pure,
-  always-compiled half (handle management, `JniErrorCode`) and a
-  `#[cfg(feature = "android")]`-gated half (actual `JNIEnv` calls).
-  `Cargo.toml` default features changed from `["android"]` to `[]`
-  accordingly. This is what makes `cargo test` work with zero Android
-  setup.
+These were checked on a phone with a debug APK (session stays up, UI
+responds):
 
-## 1d. VFS/SAF capability system — the actual product — SUBSTANTIALLY ADVANCED, still not wired to real Android
+| Check | Result |
+|-------|--------|
+| App opens, session **Active**, `/system/bin/sh` starts | Yes |
+| Idle 30s+ without ANR / 20s crash | Yes |
+| ✕ closes the session, **New** starts another | Yes |
+| Gboard + rotate + Home/resume | Yes |
+| Toolbar Ctrl+C / Ctrl+D / Tab | Yes |
+| `ps` (and similar multi-line output) | Visible in the UI |
+| Commands **execute in the child** | Yes (`ps` showed `sh`; later `mkdir`/`echo` run in the PTY) |
 
-**What's new and tested (host-side, 100% real, no gaps):**
+The 20s crash and dead ✕/IME were an ANR: `nativeRead` blocked on the
+**main thread**. That is fixed (`Dispatchers.IO` + `poll(0)` on the PTY).
 
-- `vfs/capabilities.rs` — moved from the crate root (`vfs_capabilities.rs`)
-  to its correct location under `vfs/`. No logic changes, pure
-  reorganization.
-- `FsProvider` trait extended with `chmod`/`symlink`/`readlink`, defaulting
-  to `OperationNotSupported`. `InternalProvider` now has real
-  implementations of all three (tested: chmod actually changes file mode,
-  symlink+readlink round-trip correctly).
-- **`vfs/service.rs` (new)** — `VfsService`, the facade that actually
-  enforces the capability system before dispatching to a provider.
-  Before this pass, `check_operation()` existed but nothing called it —
-  capability checking and actual file operations were two unconnected
-  systems. Now every operation goes through `VfsService`, which returns a
-  `VfsOutcome<T>` (`Ok` / `Blocked{reason,hint}` / `Degraded{value,caveat}`)
-  carrying a user-facing hint string — this is the concrete mechanism for
-  the roadmap item "surface inline warnings in the terminal instead of
-  failing silently." Tested with a `MockSafProvider` standing in for real
-  SAF (proves the trait-default blocking behavior works without needing a
-  device).
-- **`vfs/health.rs` (new)** — permission health-check state machine
-  (`PermissionState::{Valid,Stale,Revoked,NotApplicable}`,
-  `PermissionProbe` trait, `HealthMonitor`). Fully tested on host with a
-  `FakeProbe`. This answers "has this mount's access grant gone stale,"
-  which is a different question from "does this filesystem type support
-  chmod" (capabilities) — see
-  `.cursor/rules/40-vfs-saf-architecture.mdc` for why they're deliberately
-  separate.
+Session-create `"Error code: -1905618432"` was Kotlin treating a tagged
+heap pointer as a failure (`handle > 0`). Handles are now opaque positive
+IDs.
 
-**What's explicitly NOT done (be honest about this):**
+### Open bug: output streaming (this is the handoff)
 
-- `vfs/android_saf.rs`'s `SafProvider` is still a stub — every method
-  returns "not implemented." The actual JNI calls to Kotlin's
-  `ContentResolver`/`DocumentFile` APIs are not written. This pass built
-  and tested the *policy layer* (what should happen given a working
-  provider); the real SAF I/O implementation is separate work requiring
-  actual JNI wiring and on-device testing.
-- `PermissionProbe`'s real Android implementation doesn't exist yet — see
-  the TODO in `android/.../PermissionManager.kt` and
-  `.cursor/skills/wire-permission-health-check.md` for the concrete next
-  steps.
-- No Kotlin code calls into `VfsService` yet — the JNI exports
-  (`android_jni.rs`) haven't been extended to expose it. Kotlin currently
-  has no way to trigger the new capability-checked operations.
-- Nothing VFS-related in this pass was run on an actual Android device or
-  emulator.
+**The PTY is not the problem. The Compose transcript is.**
 
-## 1c. Keyboard UX — scaffolded, not implemented
+The UI is a `LazyColumn` of strings in
+`android/.../viewmodels/TerminalViewModel.kt` (`processOutput`). It is
+**not** the Rust `Screen` / ANSI renderer. Bytes are UTF-8-decoded,
+control characters dropped, ANSI regex-stripped, then lines are committed.
 
-- `CommandToolbar.kt`: added Esc/Home/End buttons (wired to real escape
-  sequences, should work as-is). Sticky-Ctrl modifier and swipe-based
-  history cycling are documented as TODOs with a full worked example in
-  `.cursor/skills/add-keyboard-toolbar-gesture.md`, but not implemented —
-  this needs actual Compose UI work and on-device gesture testing that
-  wasn't possible in this pass.
+That pipeline still loses or mangles output even when the shell did the
+right thing:
 
-## 1e. Package system — unchanged, still 0% built
+1. **One-line results vanish.** Prompts have no trailing newline. Older
+   code always *replaced the last row* with the next prompt, so `echo hello`
+   and a one-name `ls` disappeared while `ps` (many lines) looked fine.
+2. **CRLF from the PTY.** Kernel `ONLCR` turns NL into CR+LF. Treating CR
+   as “wipe this line” deleted the line just received, then LF committed
+   an empty row. Partial fix is in `processOutput` (`pendingCr` / CRLF);
+   **still not trusted on-device** — treat as the first place to debug.
+3. **mksh CSI / `1|` garbage.** `/system/etc/mkshrc` paints a color prompt.
+   Spawn now sets `ENV=/dev/null` and a simple `PS1`. If `1|` is still
+   visible, the stripper in `stripAnsiCodes` is incomplete.
+4. **Do not debug `mkdir` from the transcript alone.** We used to export
+   `PWD=/data/.../files` without a real `chdir`. Logical `pwd` and the
+   prompt showed the app dir; **`mkdir testdir` ran in `/` and failed.**
+   Child now `chdir`s in `pre_exec` (host test
+   `test_spawn_chdir_is_real_not_just_pwd_env`). After rebuild, `pwd -P`
+   must show `…/files/home`. Folders are **app-private**; they will not
+   appear in Downloads / system Files. `mkdir /sdcard/…` needs SAF (not
+   wired).
 
-No changes this pass. `package/manager.rs` and `package/repository.rs`
-remain scaffolding. See `docs/ROADMAP.md`.
+**Suggested debug order for the next person**
 
-## 1f. Polish — checkpoint/restore core done; UI still disconnected
+1. Confirm the APK includes the latest `.so` (chdir + opaque handles +
+   `poll`) *and* the latest `TerminalViewModel`.
+2. `adb logcat` while running `echo hello` / `ls` / `mkdir testdir`.
+   Compare JNI read sizes to lines that land in `outputLines`.
+3. `adb shell run-as com.terminal ls files/home` (package id may differ)
+   to see whether `mkdir` created a dir when the UI did not show it.
+4. Long-term fix: stop building a parallel string buffer. Drive the UI
+   from the native `Screen` (already updated on every PTY read in Rust)
+   instead of stripping ANSI in Kotlin.
 
-Rust can now checkpoint and restore the parsed screen. Kotlin
-`TerminalEngine.restore()` exists as a JNI wrapper only. `SessionManager`,
-`TerminalService`, and `SessionStateBanner` are still not wired to that
-path. Settings/tabs/copy-paste unchanged. The current APK still displays
-raw PTY bytes (ANSI stripped in the ViewModel), so the restored *native*
-screen is not what the Compose UI shows until that is connected.
+**Code to start in**
 
-## Verification commands (reproduce this yourself)
+| Area | File |
+|------|------|
+| Line buffer / prompt / CR | `android/app/src/main/java/com/terminal/ui/viewmodels/TerminalViewModel.kt` |
+| Read loop (must stay off Main) | `android/.../core/SessionManager.kt` (`startReadLoop`) |
+| JNI read | `rust/src/android_jni.rs` (`nativeRead`) |
+| Non-blocking PTY read | `rust/src/pty/core.rs`, `rust/src/pty/unix.rs` (`poll_in`, `chdir` in `pre_exec`) |
+| Native grid (unused by Compose today) | `rust/src/terminal/screen.rs` |
+
+The input box is a **command line** (type, IME Send/Enter). It is not a
+full tty: keys are not sent one-by-one except via the toolbar.
+
+### Rebuild reminder
 
 ```bash
 cd rust
-cargo test                                  # 80 passed (77 lib + 3 integration placeholders), 0 failed, 1 ignored
-cargo check --features android --all-targets  # type-checks JNI on host libc
-cargo check --target aarch64-linux-android --features android --lib  # bionic ioctl types
-cargo clippy --all-targets -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
-cargo clippy --features android -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
-cargo build --release
+cargo ndk -t arm64-v8a build --release --features android
+# copy libterminal_core.so into android/.../jniLibs/arm64-v8a/
 ```
 
-The 1 ignored test (`test_pty_spawn_and_command`) requires spawning a real
-shell binary and is ignored in this sandboxed environment — not a
-regression, pre-existing.
+Then rebuild/install the Android app so Kotlin and the `.so` match.
 
-**Not verified:** JNI `nativeRestore` runtime, Kotlin compile/Gradle, on-device
-checkpoint after process death. Those need an Android SDK/device.
+---
+
+## 1a. Core terminal — parser/screen attached; **UI transcript is not**
+
+- PTY spawn, read/write, ANSI parsing, screen buffer: implemented in Rust.
+- **`PtySession` owns `TerminalParser` + `Screen`.** Every PTY `read` /
+  `read_timeout` (and `feed_output` for tests) feeds the parser.
+  `checkpoint()` snapshots the live grid. `restore_from_disk()` rebuilds
+  the screen. Restored session is **not running**; caller must
+  `spawn_shell`.
+- **Spawn:** slave via `TIOCGPTPEER` then `/dev/pts/N`. `grantpt` /
+  `TIOCSWINSZ` failures are non-fatal. Login-tty first; fallback slave
+  stdio (no controlling tty). **Android `chdir`:** `pre_exec` +
+  `libc::chdir` because bionic `posix_spawn` often ignores
+  `Command::current_dir`. Kotlin cwd is `filesDir/home` (created from Java).
+- **Ioctl portability:** do not use `libc::TIOCGPTN` on Android (missing).
+  Request type is `c_int` on bionic, `c_ulong` on glibc. CI must
+  `cargo check --target aarch64-linux-android --features android --lib`
+  — host `--features android` is not enough.
+- CSI: erase-to-cursor, save/restore cursor. Mutexes use `lock_safe()`.
+- `CHECKPOINT_VERSION` mismatch is a hard error.
+- **JNI:** `nativeCheckpoint` uses the real snapshot. `nativeRestore`
+  exists; **`SessionManager` still does not call `restore()`.**
+- Opaque session handles (positive IDs), not raw pointers.
+
+## 1b. Safety cleanup — DONE (Rust core)
+
+- `clippy::unwrap_used` / `expect_used` are CI hard errors.
+- `jni_safe.rs` split so `cargo test` needs no NDK; JNI half is
+  `#[cfg(any(feature = "android", target_os = "android"))]`.
+
+## 1d. VFS/SAF — policy layer done, **not** on Android
+
+**Host-tested:** `vfs/capabilities.rs`, `VfsService` (`Ok` / `Blocked` /
+`Degraded`), `health.rs` (`PermissionProbe` / `HealthMonitor`),
+`InternalProvider` chmod/symlink/readlink.
+
+**Not done:** `SafProvider` is still a stub. No Kotlin → `VfsService` JNI.
+No real `ContentResolver` I/O. Permission probe not wired (see
+`.cursor/skills/wire-permission-health-check.md`). The shell talks to the
+**real Linux FS**, not `VfsService` — that is why `mkdir /sdcard/...`
+cannot work yet and why capability warnings never appear in the terminal.
+
+## 1c. Keyboard UX — toolbar on screen; not a real tty
+
+- `CommandToolbar` is on `TerminalScreen` (Ctrl+C/D/Z, Tab, arrows, Esc,
+  Home, End). Toolbar `|` `/` `-` buttons are still no-ops.
+- Sticky-Ctrl and swipe history: not implemented (see
+  `.cursor/skills/add-keyboard-toolbar-gesture.md`).
+- Input is IME Send of a whole line, not per-key PTY.
+
+## 1e. Packages — still scaffolding
+
+`package/manager.rs` / `package/repository.rs` unchanged. See ROADMAP.
+
+## 1f. Polish — disconnected
+
+- `TerminalService` is declared, **not started**.
+- Checkpoint/restore JNI exists; UI / `SessionManager` do not restore.
+- Settings / explorer / copy-paste not a usable flow.
+- **Compose does not render native `Screen` or colors** — that is the
+  same gap as the streaming handoff above.
+
+## What is left in Phase 1 (priority)
+
+1. **Fix Compose PTY transcript** (or switch UI to native `Screen`) —
+   current handoff.
+2. **VFS/SAF on device** — real `SafProvider`, JNI to `VfsService`,
+   inline capability warnings.
+3. Keyboard: sticky Ctrl, per-key input, remaining toolbar keys.
+4. Start `TerminalService`; checkpoint on background; restore on relaunch.
+5. Packages (scaffolding only).
+
+Do not start Phase 2 (SSH) or Phase 3 (GUI Linux) unless explicitly asked.
+
+## Verification commands (host)
+
+```bash
+cd rust
+cargo test
+# last counted: 84 passed, 1 ignored (`test_pty_spawn_and_command`)
+cargo check --features android --all-targets
+cargo check --target aarch64-linux-android --features android --lib
+cargo clippy --all-targets -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+cargo clippy --features android --all-targets -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+```
+
+**Not a substitute for a phone:** Gradle/Kotlin was not compiled in the
+agent environment. After a display-loop change, re-test `echo`, `ls`,
+`mkdir testdir`, and `pwd -P` on device — and confirm with `adb` if the
+UI still lies.

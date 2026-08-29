@@ -36,6 +36,13 @@ repeat that pattern in commit messages, docstrings, or chat responses.
 
 ## Current priority order (Phase 1)
 
+**On-device hotspot (handoff):** Compose PTY transcript / streaming — see
+`docs/PHASE1_STATUS.md`. Commands can succeed in the child while the UI
+drops lines. Do not treat that as a missing `mkdir` syscall until `pwd -P`
+and `adb ls` are checked.
+
+Then the original Phase 1 order:
+
 1. Safety cleanup (`clippy::unwrap_used` enforced — see `30-safety-and-testing.mdc`)
 2. VFS/SAF capability system (`rust/src/vfs/` — the actual product)
 3. Keyboard UX (`android/.../CommandToolbar.kt` — cheap, high-visibility)
