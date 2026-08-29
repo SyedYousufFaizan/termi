@@ -8,8 +8,9 @@
 //! share one implementation.
 
 use crate::utils::error::{PtyError, PtyResult};
+use log::{info, warn};
 use std::ffi::CStr;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::process::CommandExt;
@@ -61,63 +62,101 @@ impl PtyMaster {
 
 /// Open a PTY pair, spawn `program` on the slave, and return the master
 /// plus the child handle. The slave fd is closed in the parent after spawn.
+///
+/// On Android, opening `/dev/pts/N` from the parent and `fork`+`setsid` in
+/// `pre_exec` both fail on some OEMs. We try a full login-tty spawn first,
+/// then fall back to attaching the slave as the child's stdio without a
+/// controlling tty so a session can still start.
 pub fn spawn_on_pty(
     program: &str,
     size: PtySize,
     cwd: Option<&str>,
 ) -> PtyResult<(PtyMaster, Child)> {
     let (master, slave) = open_pty_pair(size)?;
-    let slave_fd = slave.as_raw_fd();
 
-    let mut cmd = Command::new(program);
+    match spawn_login_tty(program, cwd, slave.as_raw_fd()) {
+        Ok(child) => {
+            drop(slave);
+            return Ok((PtyMaster { file: master }, child));
+        }
+        Err(e) => {
+            warn!(
+                "login-tty spawn of {program} failed ({e}); retrying with slave stdio (no controlling tty)"
+            );
+        }
+    }
+
+    match spawn_slave_stdio(program, cwd, &slave) {
+        Ok(child) => {
+            drop(slave);
+            Ok((PtyMaster { file: master }, child))
+        }
+        Err(e) => Err(PtyError::SpawnFailed(format!(
+            "Failed to spawn {program}: {e}"
+        ))),
+    }
+}
+
+fn configure_command(cmd: &mut Command, cwd: Option<&str>) {
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("LANG", "en_US.UTF-8");
-    // stdin/stdout/stderr are replaced in pre_exec via dup2; Stdio::null
-    // avoids inheriting the parent's terminals in the meantime.
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+        cmd.env("HOME", dir);
+        cmd.env("PWD", dir);
+    }
+    #[cfg(target_os = "android")]
+    {
+        cmd.env(
+            "PATH",
+            "/product/bin:/apex/com.android.runtime/bin:/system_ext/bin:/system/bin:/system/xbin:/vendor/bin",
+        );
+        cmd.env("ANDROID_DATA", "/data");
+        cmd.env("ANDROID_ROOT", "/system");
+    }
+}
+
+/// Full POSIX login-tty: setsid + TIOCSCTTY + dup2 in the child.
+fn spawn_login_tty(program: &str, cwd: Option<&str>, slave_fd: RawFd) -> io::Result<Child> {
+    let mut cmd = Command::new(program);
+    configure_command(&mut cmd, cwd);
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::null());
     cmd.stderr(Stdio::null());
-    if let Some(dir) = cwd {
-        cmd.current_dir(dir);
-    }
 
-    // SAFETY: `slave_fd` is a live fd owned by `slave` until we drop it
-    // after `spawn`. The child `pre_exec` hook runs in the forked process
-    // before exec, where duplicating/closing that fd is the standard POSIX
-    // login-tty sequence. We do not use `slave` in the parent after spawn.
+    // SAFETY: `slave_fd` stays live in the parent `File` until after spawn.
+    // pre_exec runs in the child between fork and exec.
     unsafe {
         cmd.pre_exec(move || setup_child_tty(slave_fd));
     }
 
-    let child = cmd
-        .spawn()
-        .map_err(|e| PtyError::SpawnFailed(format!("Failed to spawn {program}: {e}")))?;
+    cmd.spawn()
+}
 
-    // Parent no longer needs the slave; closing it means the child gets
-    // EOF on the slave when the master is closed.
-    drop(slave);
-
-    Ok((PtyMaster { file: master }, child))
+/// Attach cloned slave fds as stdin/stdout/stderr. No `pre_exec`, so Android
+/// can use `posix_spawn` instead of `fork`. Ctrl+C via the kernel may not
+/// work without a controlling tty; the toolbar can still write 0x03.
+fn spawn_slave_stdio(program: &str, cwd: Option<&str>, slave: &File) -> io::Result<Child> {
+    let mut cmd = Command::new(program);
+    configure_command(&mut cmd, cwd);
+    cmd.stdin(Stdio::from(slave.try_clone()?));
+    cmd.stdout(Stdio::from(slave.try_clone()?));
+    cmd.stderr(Stdio::from(slave.try_clone()?));
+    cmd.spawn()
 }
 
 fn open_pty_pair(size: PtySize) -> PtyResult<(File, File)> {
-    let master_fd = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC) };
-    if master_fd < 0 {
-        return Err(PtyError::SpawnFailed(format!(
-            "posix_openpt failed: {}",
-            io::Error::last_os_error()
-        )));
-    }
+    let master = open_ptmx()?;
+    let master_fd = master.as_raw_fd();
 
-    // SAFETY: posix_openpt returned a freshly opened fd we now own.
-    let master = unsafe { File::from_raw_fd(master_fd) };
-
+    // bionic's grantpt is a no-op; some OEMs still return an error. Do not
+    // abort session create for that.
     if unsafe { libc::grantpt(master_fd) } != 0 {
-        return Err(PtyError::SpawnFailed(format!(
-            "grantpt failed: {}",
+        warn!(
+            "grantpt failed (continuing): {}",
             io::Error::last_os_error()
-        )));
+        );
     }
     if unsafe { libc::unlockpt(master_fd) } != 0 {
         return Err(PtyError::SpawnFailed(format!(
@@ -126,15 +165,78 @@ fn open_pty_pair(size: PtySize) -> PtyResult<(File, File)> {
         )));
     }
 
-    let slave_path = ptsname(master_fd)?;
-    let slave = File::options()
+    let slave = open_slave(master_fd)?;
+    if let Err(e) = set_winsize(master_fd, size) {
+        warn!("TIOCSWINSZ failed (continuing): {e}");
+    }
+    Ok((master, slave))
+}
+
+fn open_ptmx() -> PtyResult<File> {
+    let fd = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC) };
+    if fd >= 0 {
+        // SAFETY: posix_openpt returned a freshly opened fd we now own.
+        return Ok(unsafe { File::from_raw_fd(fd) });
+    }
+    let posix_err = io::Error::last_os_error();
+    OpenOptions::new()
         .read(true)
         .write(true)
-        .open(&slave_path)
-        .map_err(|e| PtyError::SpawnFailed(format!("Failed to open slave {slave_path}: {e}")))?;
+        .open("/dev/ptmx")
+        .map_err(|e| {
+            PtyError::SpawnFailed(format!(
+                "posix_openpt failed ({posix_err}); open(/dev/ptmx) failed ({e})"
+            ))
+        })
+}
 
-    set_winsize(master_fd, size)?;
-    Ok((master, slave))
+/// TIOCGPTPEER: `_IO('T', 0x41)` — open the slave from the master fd without
+/// walking `/dev/pts`, which is where Android SELinux often denies us.
+const TIOCGPTPEER: libc::c_ulong = 0x5441;
+
+fn open_slave(master_fd: RawFd) -> PtyResult<File> {
+    let flags = libc::O_RDWR | libc::O_NOCTTY;
+    let peer = unsafe { libc::ioctl(master_fd, TIOCGPTPEER, flags) };
+    if peer >= 0 {
+        info!("Opened PTY slave via TIOCGPTPEER");
+        // SAFETY: ioctl returned a new fd on success.
+        return Ok(unsafe { File::from_raw_fd(peer as RawFd) });
+    }
+    let peer_err = io::Error::last_os_error();
+
+    if let Ok(n) = pty_index(master_fd) {
+        let path = format!("/dev/pts/{n}");
+        match File::options().read(true).write(true).open(&path) {
+            Ok(f) => {
+                info!("Opened PTY slave {path}");
+                return Ok(f);
+            }
+            Err(e) => warn!("open({path}) failed: {e}"),
+        }
+    }
+
+    let path = ptsname(master_fd)?;
+    File::options()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .map_err(|e| {
+            PtyError::SpawnFailed(format!(
+                "Failed to open PTY slave {path}: {e} (TIOCGPTPEER: {peer_err})"
+            ))
+        })
+}
+
+fn pty_index(master_fd: RawFd) -> PtyResult<u32> {
+    let mut n: libc::c_uint = 0;
+    let rc = unsafe { libc::ioctl(master_fd, libc::TIOCGPTN, &mut n) };
+    if rc != 0 {
+        return Err(PtyError::SpawnFailed(format!(
+            "TIOCGPTN failed: {}",
+            io::Error::last_os_error()
+        )));
+    }
+    Ok(n)
 }
 
 fn ptsname(master_fd: RawFd) -> PtyResult<String> {
@@ -171,12 +273,10 @@ fn set_winsize(fd: RawFd, size: PtySize) -> PtyResult<()> {
 }
 
 /// POSIX login-tty sequence, run in the child between fork and exec.
+///
+/// Only async-signal-safe calls here — no `log`, no malloc-heavy formatting.
 fn setup_child_tty(slave_fd: RawFd) -> io::Result<()> {
-    if unsafe { libc::setsid() } < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // TIOCSCTTY can fail if we already have a controlling tty; not fatal
-    // for a shell spawn as long as stdio is the slave.
+    let _ = unsafe { libc::setsid() };
     let _ = unsafe { libc::ioctl(slave_fd, libc::TIOCSCTTY, 0) };
     if unsafe { libc::dup2(slave_fd, 0) } < 0 {
         return Err(io::Error::last_os_error());
@@ -222,5 +322,22 @@ mod tests {
             },
         )
         .unwrap();
+    }
+
+    #[test]
+    fn test_spawn_true_via_pty() {
+        let prog = ["/usr/bin/true", "/bin/true"]
+            .iter()
+            .copied()
+            .find(|p| std::path::Path::new(p).exists());
+        let Some(prog) = prog else {
+            return;
+        };
+        let (_master, mut child) = spawn_on_pty(prog, PtySize::default(), None).unwrap();
+        let status = child.wait().unwrap();
+        assert!(
+            status.success(),
+            "spawned {prog} via PTY but it failed: {status:?}"
+        );
     }
 }

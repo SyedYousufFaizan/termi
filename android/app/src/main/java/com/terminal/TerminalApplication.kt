@@ -51,14 +51,20 @@ class TerminalApplication : Application() {
         isNativeLibraryLoaded = TerminalEngine.loadNativeLibrary()
         
         if (isNativeLibraryLoaded) {
-            // Initialize the engine
-            TerminalEngine.initialize()
-                .onSuccess { 
-                    Timber.i("Terminal engine v${TerminalEngine.getVersion()} ready")
-                }
-                .onFailure { e ->
-                    Timber.e(e, "Failed to initialize terminal engine")
-                }
+            try {
+                TerminalEngine.initialize()
+                    .onSuccess {
+                        Timber.i("Terminal engine v${TerminalEngine.getVersion()} ready")
+                    }
+                    .onFailure { e ->
+                        Timber.e(e, "Failed to initialize terminal engine")
+                    }
+            } catch (e: UnsatisfiedLinkError) {
+                Timber.e(
+                    e,
+                    "Native init missing — rebuild libterminal_core.so with --features android"
+                )
+            }
         } else {
             Timber.e("CRITICAL: Failed to load native library!")
         }

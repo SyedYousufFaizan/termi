@@ -39,8 +39,12 @@ pub mod vfs;
 // Package management (Month 3)
 pub mod package;
 
-// Platform-specific JNI exports
-#[cfg(feature = "android")]
+// Platform-specific JNI exports. Feature flag covers host type-checking
+// (`cargo check --features android`). `target_os = "android"` covers real
+// NDK builds so forgetting `--features android` does not ship an .so with
+// no Java_ symbols (that shows up as "Failed to create session" on every
+// launch via UnsatisfiedLinkError).
+#[cfg(any(feature = "android", target_os = "android"))]
 pub mod android_jni;
 
 // Re-exports for convenience

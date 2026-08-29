@@ -17,7 +17,7 @@
 //! - **Always compiled** (below): `JniErrorCode`, handle box/unbox helpers,
 //!   jboolean conversion, panic hook installation. Zero dependency on the
 //!   `jni` crate. Fully covered by `cargo test --no-default-features`.
-//! - **`#[cfg(feature = "android")]`** (bottom of file): the actual
+//! - **`#[cfg(any(feature = "android", target_os = "android"))]`** (bottom of file): the actual
 //!   `JNIEnv`-based call wrappers. These require the `jni` crate and can only
 //!   be meaningfully exercised on-device or with `--features android`.
 //!
@@ -90,14 +90,14 @@ pub fn install_panic_hook() {
 // should still type-check in CI via `cargo check --features android` so a
 // signature typo doesn't silently rot until someone builds for a phone.
 // ============================================================================
-#[cfg(feature = "android")]
+#[cfg(any(feature = "android", target_os = "android"))]
 use jni::objects::{GlobalRef, JObject, JString};
-#[cfg(feature = "android")]
+#[cfg(any(feature = "android", target_os = "android"))]
 use jni::JNIEnv;
 
 /// Check for and clear Java exceptions after JNI calls
 /// Returns true if an exception was pending (and is now cleared)
-#[cfg(feature = "android")]
+#[cfg(any(feature = "android", target_os = "android"))]
 #[inline]
 pub fn check_and_clear_exception(env: &mut JNIEnv) -> bool {
     match env.exception_check() {
@@ -122,7 +122,7 @@ pub fn check_and_clear_exception(env: &mut JNIEnv) -> bool {
 }
 
 /// Safe wrapper for calling Java void methods
-#[cfg(feature = "android")]
+#[cfg(any(feature = "android", target_os = "android"))]
 pub fn safe_call_void_method(
     env: &mut JNIEnv,
     obj: &JObject,
@@ -155,7 +155,7 @@ pub fn safe_call_void_method(
 }
 
 /// Safe wrapper for calling Java methods that return int
-#[cfg(feature = "android")]
+#[cfg(any(feature = "android", target_os = "android"))]
 pub fn safe_call_int_method(
     env: &mut JNIEnv,
     obj: &JObject,
@@ -191,7 +191,7 @@ pub fn safe_call_int_method(
 }
 
 /// Safe wrapper for calling Java methods that return boolean
-#[cfg(feature = "android")]
+#[cfg(any(feature = "android", target_os = "android"))]
 pub fn safe_call_bool_method(
     env: &mut JNIEnv,
     obj: &JObject,
@@ -227,7 +227,7 @@ pub fn safe_call_bool_method(
 }
 
 /// Safe wrapper for calling Java methods that return long
-#[cfg(feature = "android")]
+#[cfg(any(feature = "android", target_os = "android"))]
 pub fn safe_call_long_method(
     env: &mut JNIEnv,
     obj: &JObject,
@@ -264,7 +264,7 @@ pub fn safe_call_long_method(
 
 /// Safely convert a JString to a Rust String
 /// Returns None if the string is null or invalid UTF-8
-#[cfg(feature = "android")]
+#[cfg(any(feature = "android", target_os = "android"))]
 pub fn safe_get_string(env: &mut JNIEnv, s: &JString) -> JniResult<String> {
     if s.is_null() {
         return Err(JniErrorCode::NullPointer);
@@ -279,7 +279,7 @@ pub fn safe_get_string(env: &mut JNIEnv, s: &JString) -> JniResult<String> {
 }
 
 /// Safely create a new JString from a Rust string
-#[cfg(feature = "android")]
+#[cfg(any(feature = "android", target_os = "android"))]
 pub fn safe_new_string<'a>(env: &mut JNIEnv<'a>, s: &str) -> JniResult<JString<'a>> {
     env.new_string(s).map_err(|e| {
         error!("Failed to create JString from '{}': {:?}", s, e);
@@ -382,7 +382,7 @@ pub unsafe fn handle_drop<T>(handle: i64) -> JniResult<()> {
 
 /// Create a GlobalRef that persists beyond the current JNI call
 /// Use this for callbacks or storing Java objects in Rust
-#[cfg(feature = "android")]
+#[cfg(any(feature = "android", target_os = "android"))]
 pub fn create_global_ref<'a>(env: &mut JNIEnv<'a>, obj: &JObject<'a>) -> JniResult<GlobalRef> {
     if obj.is_null() {
         return Err(JniErrorCode::NullPointer);

@@ -138,13 +138,25 @@ object TerminalEngine {
      */
     fun createSession(sessionId: String): Result<Long> {
         if (!isLoaded) return Result.success(999L) // Mock handle
-        
-        val handle = nativeCreateSession(sessionId)
-        return if (handle > 0) {
-            Timber.d("Created session '$sessionId' with handle $handle")
-            Result.success(handle)
-        } else {
-            Result.failure(TerminalException(handle.toInt(), "Failed to create session"))
+
+        return try {
+            val handle = nativeCreateSession(sessionId)
+            if (handle > 0) {
+                Timber.d("Created session '$sessionId' with handle $handle")
+                Result.success(handle)
+            } else {
+                Result.failure(
+                    TerminalException(handle.toInt(), lastErrorOr("Failed to create session"))
+                )
+            }
+        } catch (e: UnsatisfiedLinkError) {
+            Result.failure(
+                Exception(
+                    "Native createSession is missing from libterminal_core.so. " +
+                        "Rebuild with: cargo ndk -t arm64-v8a build --release --features android",
+                    e
+                )
+            )
         }
     }
     
@@ -168,15 +180,31 @@ object TerminalEngine {
      * @param handle Session handle from [createSession]
      * @param shellPath Path to shell (e.g., "/system/bin/sh")
      */
-    fun spawnShell(handle: Long, shellPath: String = "/system/bin/sh"): Result<Unit> {
+    fun spawnShell(
+        handle: Long,
+        shellPath: String = "/system/bin/sh",
+        cwd: String = ""
+    ): Result<Unit> {
         if (!isLoaded) return Result.success(Unit)
-        
-        val result = nativeSpawnShell(handle, shellPath)
-        return if (result == ErrorCode.SUCCESS) {
-            Timber.d("Spawned shell: $shellPath")
-            Result.success(Unit)
-        } else {
-            Result.failure(TerminalException(result, "Failed to spawn shell"))
+
+        return try {
+            val result = nativeSpawnShell(handle, shellPath, cwd)
+            if (result == ErrorCode.SUCCESS) {
+                Timber.d("Spawned shell: $shellPath cwd=$cwd")
+                Result.success(Unit)
+            } else {
+                Result.failure(
+                    TerminalException(result, lastErrorOr("Failed to spawn shell"))
+                )
+            }
+        } catch (e: UnsatisfiedLinkError) {
+            Result.failure(
+                Exception(
+                    "Native spawnShell is missing from libterminal_core.so. " +
+                        "Rebuild with: cargo ndk -t arm64-v8a build --release --features android",
+                    e
+                )
+            )
         }
     }
     
@@ -369,6 +397,14 @@ object TerminalEngine {
             nativeLog(level, message)
         }
     }
+
+    private fun lastErrorOr(fallback: String): String {
+        return try {
+            nativeLastError()?.takeIf { it.isNotBlank() } ?: fallback
+        } catch (_: Throwable) {
+            fallback
+        }
+    }
     
     // ========================================================================
     // Native Methods
@@ -381,7 +417,7 @@ object TerminalEngine {
     // Session management
     private external fun nativeCreateSession(sessionId: String): Long
     private external fun nativeDestroySession(handle: Long): Int
-    private external fun nativeSpawnShell(handle: Long, shellPath: String): Int
+    private external fun nativeSpawnShell(handle: Long, shellPath: String, cwd: String): Int
     private external fun nativeWrite(handle: Long, data: ByteArray): Int
     private external fun nativeRead(handle: Long, buffer: ByteArray): Int
     private external fun nativeResize(handle: Long, cols: Int, rows: Int): Int
@@ -401,6 +437,7 @@ object TerminalEngine {
     
     // Logging
     private external fun nativeLog(level: Int, message: String)
+    private external fun nativeLastError(): String?
 }
 
 /**

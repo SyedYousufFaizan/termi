@@ -48,8 +48,9 @@ class SessionManager(
                 // Create native session
                 val handle = TerminalEngine.createSession(sessionId).getOrThrow()
                 
-                // Spawn shell
-                TerminalEngine.spawnShell(handle, shellPath).getOrThrow()
+                // Spawn shell in the app's files dir (writable; "/" is not)
+                val cwd = checkpointDir.parent ?: checkpointDir.absolutePath
+                TerminalEngine.spawnShell(handle, shellPath, cwd).getOrThrow()
                 
                 // Create session wrapper
                 val session = Session(

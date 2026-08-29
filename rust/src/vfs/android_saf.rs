@@ -8,7 +8,7 @@
 //! (see `docs/PHASE1_STATUS.md`). Keeping them means `cargo clippy
 //! --features android` type-checks the real `jni` crate types instead of
 //! a hollow stub that would rot until someone builds an APK.
-#![cfg(feature = "android")]
+#![cfg(any(feature = "android", target_os = "android"))]
 #![allow(dead_code)]
 
 use crate::jni_safe::{safe_call_bool_method, JniErrorCode, JniResult};

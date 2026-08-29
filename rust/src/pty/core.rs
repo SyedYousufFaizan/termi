@@ -105,6 +105,15 @@ impl PtySession {
         Ok(())
     }
 
+    /// Set the working directory used on the next [`spawn_shell`].
+    /// Empty or `"/"` is ignored (Android apps cannot use `/` as a cwd).
+    pub fn set_cwd(&mut self, cwd: impl Into<String>) {
+        let cwd = cwd.into();
+        if !cwd.is_empty() && cwd != "/" {
+            self.state.lock_safe().cwd = cwd;
+        }
+    }
+
     /// Write data to the PTY (user input)
     pub fn write(&mut self, data: &[u8]) -> PtyResult<usize> {
         if !self.running {

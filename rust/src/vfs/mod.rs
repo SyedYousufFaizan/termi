@@ -39,7 +39,7 @@ pub mod mount;
 pub mod provider;
 pub mod service;
 
-#[cfg(feature = "android")]
+#[cfg(any(feature = "android", target_os = "android"))]
 pub mod android_saf;
 
 #[cfg(feature = "ios")]

@@ -9,7 +9,7 @@
 //! 3. Validate handles before use
 //! 4. Return error codes on failure
 
-#![cfg(feature = "android")]
+#![cfg(any(feature = "android", target_os = "android"))]
 
 use crate::jni_safe::{
     handle_box, handle_drop, handle_to_mut, handle_to_ref, safe_get_string, safe_new_string,
@@ -81,6 +81,7 @@ pub extern "system" fn Java_com_terminal_core_TerminalEngine_nativeCreateSession
             handle
         }
         Err(e) => {
+            crate::utils::set_last_error(format!("Failed to create session: {e:?}"));
             error!("Failed to create session: {:?}", e);
             JniErrorCode::PtyError as jlong
         }
@@ -119,24 +120,28 @@ pub extern "system" fn Java_com_terminal_core_TerminalEngine_nativeSpawnShell<'l
     _class: JClass<'local>,
     handle: jlong,
     shell_path: JString<'local>,
+    cwd: JString<'local>,
 ) -> jint {
-    // Validate handle
     let session = match unsafe { handle_to_mut::<PtySession>(handle) } {
         Ok(s) => s,
         Err(e) => return e.into(),
     };
 
-    // Get shell path
     let shell_path = match safe_get_string(&mut env, &shell_path) {
         Ok(s) => s,
         Err(e) => return e.into(),
     };
 
-    // Spawn shell
+    if let Ok(dir) = safe_get_string(&mut env, &cwd) {
+        session.set_cwd(dir);
+    }
+
     match session.spawn_shell(&shell_path) {
         Ok(_) => JniErrorCode::Success.into(),
         Err(e) => {
-            error!("Failed to spawn shell: {:?}", e);
+            let msg = e.to_string();
+            crate::utils::set_last_error(&msg);
+            error!("Failed to spawn shell: {}", msg);
             JniErrorCode::PtyError.into()
         }
     }
@@ -492,4 +497,14 @@ pub extern "system" fn Java_com_terminal_core_TerminalEngine_nativeLog<'local>(
         3 => error!("[Kotlin] {}", msg),
         _ => debug!("[Kotlin] {}", msg),
     }
+}
+
+/// Last native error string (cleared on read). Shown in the session-create banner.
+#[no_mangle]
+pub extern "system" fn Java_com_terminal_core_TerminalEngine_nativeLastError<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> JString<'local> {
+    let msg = crate::utils::take_last_error();
+    safe_new_string(&mut env, &msg).unwrap_or_default()
 }

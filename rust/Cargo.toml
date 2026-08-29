@@ -16,7 +16,7 @@ libc = "0.2"
 # ANSI parsing
 vte = "0.13"
 
-# JNI (Android only)
+# JNI (optional on host for `cargo check --features android`)
 jni = { version = "0.21", optional = true }
 
 # Serialization for checkpointing
@@ -28,6 +28,12 @@ log = "0.4"
 
 # Error handling
 thiserror = "1.0"
+
+# When cross-compiling for Android, always pull in JNI so a `cargo ndk`
+# build that forgets `--features android` still exports Java_ methods.
+# Host `cargo test` (target_os = linux) is unaffected.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
 
 [features]
 # Default is intentionally empty. `cargo build` / `cargo test` with no flags
