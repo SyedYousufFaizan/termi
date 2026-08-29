@@ -152,13 +152,24 @@ class TerminalViewModel(application: Application) : AndroidViewModel(application
     }
     
     /**
-     * Send Ctrl+C (SIGINT).
+     * Send raw bytes to the PTY (toolbar keys, Ctrl sequences).
      */
-    fun sendCtrlC() {
+    fun sendRaw(bytes: ByteArray) {
         val session = currentSession ?: return
-        
+        if (bytes.isEmpty()) return
         viewModelScope.launch(Dispatchers.IO) {
-            sessionManager.signalSession(session.id, 2) // SIGINT
+            sessionManager.writeToSession(session.id, bytes)
+                .onFailure { e ->
+                    Timber.e(e, "Failed to write to PTY")
+                    _uiState.update { it.copy(error = "Failed to send: ${e.message}") }
+                }
+        }
+    }
+    fun sendCtrlC() {
+        sendRaw(byteArrayOf(0x03))
+        val session = currentSession ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            sessionManager.signalSession(session.id, 2) // SIGINT; no-op if no CTTY
         }
     }
     

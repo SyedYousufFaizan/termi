@@ -14,6 +14,7 @@ use crate::utils::sync_ext::LockExt;
 use log::{debug, error, info, warn};
 use std::fs::File;
 use std::io::{Read, Write};
+use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::process::Child;
 use std::sync::{Arc, Mutex};
@@ -144,6 +145,16 @@ impl PtySession {
         }
 
         let reader = self.reader.as_mut().ok_or(PtyError::NotInitialized)?;
+
+        match crate::pty::unix::poll_in(reader.as_raw_fd(), 0) {
+            Ok(false) => return Ok(0),
+            Ok(true) => {}
+            Err(e) => {
+                error!("PTY poll failed: {e}");
+                self.check_child_status();
+                return Err(PtyError::ReadFailed(e.to_string()));
+            }
+        }
 
         match reader.read(buf) {
             Ok(0) => {
@@ -494,6 +505,29 @@ mod tests {
 
         let state = session.terminal_state().unwrap();
         assert_eq!(state.dimensions, (120, 40));
+    }
+
+    #[test]
+    fn test_read_on_idle_pty_does_not_block() {
+        let cat = ["/usr/bin/cat", "/bin/cat"]
+            .iter()
+            .copied()
+            .find(|p| std::path::Path::new(p).exists());
+        let Some(cat) = cat else {
+            return;
+        };
+        let mut session = PtySession::new("idle_read").unwrap();
+        session.spawn_shell(cat).unwrap();
+        let mut buf = [0u8; 64];
+        let start = std::time::Instant::now();
+        let n = session.read(&mut buf).expect("idle PTY read");
+        assert_eq!(n, 0, "cat has no input so the master should be empty");
+        assert!(
+            start.elapsed() < std::time::Duration::from_millis(200),
+            "blocking PTY read would freeze Android's main thread: {:?}",
+            start.elapsed()
+        );
+        session.close().ok();
     }
 
     #[test]

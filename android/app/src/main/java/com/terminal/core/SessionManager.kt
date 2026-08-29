@@ -189,9 +189,13 @@ class SessionManager(
     
     /**
      * Start the read loop for a session.
+     *
+     * MUST run on [Dispatchers.IO]. [viewModelScope] uses Main, and
+     * `nativeRead` used to block the UI thread until the next PTY byte —
+     * which is why the X/keyboard froze and the app died at ~20s (ANR).
      */
     private fun startReadLoop(session: Session) {
-        session.readJob = scope.launch {
+        session.readJob = scope.launch(Dispatchers.IO) {
             val buffer = ByteArray(8192)
             
             while (isActive && TerminalEngine.isRunning(session.handle)) {

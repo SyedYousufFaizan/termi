@@ -1,6 +1,8 @@
 package com.terminal.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -16,7 +18,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
@@ -25,7 +27,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.terminal.TerminalApplication
+import com.terminal.ui.components.CommandToolbar
 import com.terminal.ui.viewmodels.TerminalViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -40,6 +44,7 @@ fun TerminalScreen(
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
     
     // Auto-scroll to bottom when new output arrives
     LaunchedEffect(uiState.outputLines.size) {
@@ -48,9 +53,15 @@ fun TerminalScreen(
         }
     }
     
-    // Request focus on launch
-    LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
+    // Show IME once the session is actually connected. Requesting focus
+    // in LaunchedEffect(Unit) races composition and used to run while
+    // the main thread was blocked in nativeRead.
+    LaunchedEffect(uiState.isConnected) {
+        if (uiState.isConnected || !TerminalApplication.isNativeLibraryLoaded) {
+            delay(100)
+            runCatching { focusRequester.requestFocus() }
+            keyboard?.show()
+        }
     }
     
     Scaffold(
@@ -67,6 +78,7 @@ fun TerminalScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .imePadding()
                 .background(TerminalColors.background)
         ) {
             // Error banner
@@ -107,6 +119,18 @@ fun TerminalScreen(
                 }
             }
             
+            CommandToolbar(
+                onCtrlC = { viewModel.sendCtrlC() },
+                onCtrlD = { viewModel.sendCtrlD() },
+                onCtrlZ = { viewModel.sendRaw(byteArrayOf(0x1A)) },
+                onTab = { viewModel.sendRaw("\t".toByteArray()) },
+                onArrowUp = { viewModel.sendRaw("\u001b[A".toByteArray()) },
+                onArrowDown = { viewModel.sendRaw("\u001b[B".toByteArray()) },
+                onEsc = { viewModel.sendRaw("\u001b".toByteArray()) },
+                onHome = { viewModel.sendRaw("\u001b[H".toByteArray()) },
+                onEnd = { viewModel.sendRaw("\u001b[F".toByteArray()) }
+            )
+
             // Input area
             TerminalInput(
                 value = uiState.inputText,
@@ -215,11 +239,22 @@ private fun TerminalInput(
     focusRequester: FocusRequester,
     enabled: Boolean
 ) {
+    val keyboard = LocalSoftwareKeyboardController.current
+    val interaction = remember { MutableInteractionSource() }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(TerminalColors.inputBackground)
-            .padding(horizontal = 8.dp, vertical = 12.dp),
+            .clickable(
+                interactionSource = interaction,
+                indication = null
+            ) {
+                runCatching { focusRequester.requestFocus() }
+                keyboard?.show()
+            }
+            .padding(horizontal = 8.dp, vertical = 12.dp)
+            .heightIn(min = 28.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         // Prompt
@@ -253,7 +288,22 @@ private fun TerminalInput(
                 onSend = { onSubmit() }
             ),
             enabled = enabled,
-            singleLine = true
+            singleLine = true,
+            decorationBox = { inner ->
+                Box(Modifier.fillMaxWidth()) {
+                    if (value.isEmpty()) {
+                        Text(
+                            text = "tap to type",
+                            style = TextStyle(
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 14.sp,
+                                color = TerminalColors.text.copy(alpha = 0.35f)
+                            )
+                        )
+                    }
+                    inner()
+                }
+            }
         )
     }
 }

@@ -172,6 +172,39 @@ fn open_pty_pair(size: PtySize) -> PtyResult<(File, File)> {
     Ok((master, slave))
 }
 
+/// `poll(POLLIN)` on a PTY fd. `timeout_ms == 0` is a non-blocking check.
+///
+/// `PtySession::read` is documented as non-blocking, but the master fd is
+/// created blocking. JNI `nativeRead` used to wait forever on the Kotlin
+/// main thread (`viewModelScope`), which froze the UI and tripped a ~20s
+/// OEM ANR.
+pub fn poll_in(fd: RawFd, timeout_ms: i32) -> io::Result<bool> {
+    let mut fds = [libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    }];
+    loop {
+        let rc = unsafe { libc::poll(fds.as_mut_ptr(), 1 as libc::nfds_t, timeout_ms) };
+        if rc < 0 {
+            let err = io::Error::last_os_error();
+            if err.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(err);
+        }
+        if rc == 0 {
+            return Ok(false);
+        }
+        let re = fds[0].revents;
+        if re & libc::POLLNVAL != 0 {
+            return Err(io::Error::from_raw_os_error(libc::EBADF));
+        }
+        // POLLIN or POLLHUP: a following read will not block (EOF on HUP).
+        return Ok((re & (libc::POLLIN | libc::POLLHUP | libc::POLLERR)) != 0);
+    }
+}
+
 /// bionic's `ioctl` request is `c_int`; glibc's is `c_ulong`. Host
 /// `cargo check --features android` uses the host libc and will not catch
 /// this — always also check `--target aarch64-linux-android`.
@@ -337,6 +370,33 @@ mod tests {
             },
         )
         .unwrap();
+    }
+
+    #[test]
+    fn test_poll_in_empty_master_returns_immediately() {
+        let (master, _slave) = open_pty_pair(PtySize::default()).unwrap();
+        let start = std::time::Instant::now();
+        assert!(
+            !poll_in(master.as_raw_fd(), 0).unwrap(),
+            "idle PTY master should not be readable"
+        );
+        assert!(
+            start.elapsed() < std::time::Duration::from_millis(200),
+            "poll(0) blocked: {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[test]
+    fn test_poll_in_sees_bytes_from_slave() {
+        use std::io::Write;
+        let (master, mut slave) = open_pty_pair(PtySize::default()).unwrap();
+        slave.write_all(b"hi").unwrap();
+        slave.flush().unwrap();
+        assert!(
+            poll_in(master.as_raw_fd(), 200).unwrap(),
+            "master should be readable after slave write"
+        );
     }
 
     #[test]

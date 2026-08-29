@@ -5,8 +5,9 @@ the README claimed and what was actually built. This file is the
 single source of truth for "is X actually done" — keep it updated as
 Phase 1 progresses, and check it before assuming a feature exists.
 
-Last updated: as of the JNI handle-sign fix (opaque positive IDs; on-device
-session create still needs a rebuilt APK with matching Kotlin + `.so`).
+Last updated: as of the main-thread PTY-read ANR fix (opaque handles +
+non-blocking `poll` + Kotlin `Dispatchers.IO` read loop). On-device still
+needs a rebuilt APK.
 
 ## 1a. Core terminal — parser/screen now attached to the PTY session
 
@@ -27,7 +28,12 @@ session create still needs a rebuilt APK with matching Kotlin + `.so`).
   gained a `cwd` argument). **On-device "Error code: -1905618432"** was
   Kotlin treating a tagged heap pointer as a failed `handle > 0` check —
   `PtySession::new` does not open a PTY and usually succeeds. Handles are
-  now opaque positive IDs. **Not verified on a device in this environment.**
+  now opaque positive IDs. **Main-thread ANR (~20s crash, dead X/IME):**
+  `SessionManager` was constructed with `viewModelScope` (Main) and
+  `nativeRead` blocked on a blocking PTY fd, so the first idle read froze
+  the UI until the OEM ANR watchdog killed the app. Reads now `poll(0)`
+  and the Kotlin loop runs on `Dispatchers.IO`. **Not verified on a device
+  in this environment.**
 - CSI gaps filled on the same path: erase-to-cursor (CSI J/K mode 1) and
   save/restore cursor (CSI `s`/`u`). Parser mutexes use `lock_safe()`.
 - Checkpoint format version is enforced (`CHECKPOINT_VERSION`); mismatch
