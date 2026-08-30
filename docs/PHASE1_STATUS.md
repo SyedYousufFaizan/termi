@@ -5,10 +5,8 @@ the README claimed and what was actually built. This file is the
 single source of truth for "is X actually done" — keep it updated as
 Phase 1 progresses, and check it before assuming a feature exists.
 
-**Last updated:** 2026-08-29 (on-device handoff). Shell commands run on a
-real phone. **Compose output streaming is still wrong** — that is the
-bug to hand to the next person. Rebuild Kotlin + `libterminal_core.so`
-together (`nativeSpawnShell` takes a cwd argument).
+**Last updated:** 2026-08-30. Shell commands run on a
+real phone. **Compose output streaming is fixed** — streaming ANSI parser state machine, UTF-8 boundary protection, backspace handling, and duplicate command elimination are active.
 
 ---
 
@@ -28,6 +26,7 @@ responds):
 | Toolbar Ctrl+C / Ctrl+D / Tab | Yes |
 | `ps` (and similar multi-line output) | Visible in the UI |
 | Commands **execute in the child** | Yes (`ps` showed `sh`; later `mkdir`/`echo` run in the PTY) |
+| Output streaming & single-line commands | Fixed (`TerminalViewModel` streaming parser) |
 
 The 20s crash and dead ✕/IME were an ANR: `nativeRead` blocked on the
 **main thread**. That is fixed (`Dispatchers.IO` + `poll(0)` on the PTY).
@@ -36,28 +35,14 @@ Session-create `"Error code: -1905618432"` was Kotlin treating a tagged
 heap pointer as a failure (`handle > 0`). Handles are now opaque positive
 IDs.
 
-### Open bug: output streaming (this is the handoff)
+### Resolved: PTY Output Streaming
 
-**The PTY is not the problem. The Compose transcript is.**
+**Fix details in [`TerminalViewModel.kt`](file:///D:/termi/android/app/src/main/java/com/terminal/ui/viewmodels/TerminalViewModel.kt):**
 
-The UI is a `LazyColumn` of strings in
-`android/.../viewmodels/TerminalViewModel.kt` (`processOutput`). It is
-**not** the Rust `Screen` / ANSI renderer. Bytes are UTF-8-decoded,
-control characters dropped, ANSI regex-stripped, then lines are committed.
-
-That pipeline still loses or mangles output even when the shell did the
-right thing:
-
-1. **One-line results vanish.** Prompts have no trailing newline. Older
-   code always *replaced the last row* with the next prompt, so `echo hello`
-   and a one-name `ls` disappeared while `ps` (many lines) looked fine.
-2. **CRLF from the PTY.** Kernel `ONLCR` turns NL into CR+LF. Treating CR
-   as “wipe this line” deleted the line just received, then LF committed
-   an empty row. Partial fix is in `processOutput` (`pendingCr` / CRLF);
-   **still not trusted on-device** — treat as the first place to debug.
-3. **mksh CSI / `1|` garbage.** `/system/etc/mkshrc` paints a color prompt.
-   Spawn now sets `ENV=/dev/null` and a simple `PS1`. If `1|` is still
-   visible, the stripper in `stripAnsiCodes` is incomplete.
+1. **Eliminated Duplicate Command Echo**: Removed manual `addOutputLine("$ $command")` in native mode; the PTY kernel automatically echoes typed input back over the master read loop.
+2. **Streaming ANSI State Machine**: Replaced naive chunk regexes with a zero-allocation streaming state machine (`NORMAL`, `ESC`, `CSI`, `OSC`, `OSC_ESC`). Eliminates escape code leakage (e.g., `1|` or CSI remnants) even across read chunk boundaries.
+3. **Backspace (`\b`) & Tab Support**: Handled `\b` (`0x08`) in `partialLine` to correctly reflect in-line character deletion.
+4. **UTF-8 Chunk Boundary Alignment**: Added `getValidUtf8Length()` to preserve incomplete multi-byte UTF-8 sequences across PTY read boundaries.
 4. **Do not debug `mkdir` from the transcript alone.** We used to export
    `PWD=/data/.../files` without a real `chdir`. Logical `pwd` and the
    prompt showed the app dir; **`mkdir testdir` ran in `/` and failed.**
