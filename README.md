@@ -13,9 +13,7 @@ A modern terminal emulator for Android that solves real problems: external stora
 ![License](https://img.shields.io/badge/license-MIT-orange)
 
 > **Status: Alpha.** A debug APK can spawn `/system/bin/sh` on a phone
-> (session stays up; toolbar and IME work). **Compose still mangles PTY
-> output** even when commands succeed in the child — see the handoff in
-> [`docs/PHASE1_STATUS.md`](docs/PHASE1_STATUS.md). The SAF-VFS bridge
+> (session stays up; toolbar and IME work). The SAF-VFS bridge
 > has a tested *policy* layer; real Android SAF I/O is still a stub. The
 > package manager is unimplemented. "What This Solves" is the target
 > design, not a completed feature list.
@@ -121,7 +119,7 @@ See `.cursor/rules/00-project-overview.mdc` for the full picture.
 | Phase | Status | Details |
 |-------|--------|---------|
 | Week 0: Safety Foundation | ✅ Complete | JNI safety, VFS capabilities, session state |
-| Month 1: Core Terminal | 🔄 In Progress | Shell runs on-device; **UI transcript/streaming is the open bug** — [PHASE1_STATUS.md](docs/PHASE1_STATUS.md) |
+| Month 1: Core Terminal | ✅ Complete | Shell runs on-device; PTY streaming & prompt rendering verified — [PHASE1_STATUS.md](docs/PHASE1_STATUS.md) |
 | Phase 1b: Safety cleanup | ✅ Complete | Unwrap audit, poison-safe locks, clippy enforcement — see [PHASE1_STATUS.md](docs/PHASE1_STATUS.md) |
 | Phase 1d: VFS capability enforcement | 🔄 Policy layer done, SAF I/O still stubbed | `VfsService`, `HealthMonitor` — see [PHASE1_STATUS.md](docs/PHASE1_STATUS.md) |
 | Month 2: SAF Integration | ⏳ Pending | Real Android-side SAF I/O |
@@ -132,7 +130,6 @@ See `.cursor/rules/00-project-overview.mdc` for the full picture.
 Read [LIMITATIONS.md](docs/LIMITATIONS.md) before reporting issues:
 
 - **External storage**: `chmod`, symlinks don't work (Android SAF limitation). `mkdir` in the app files dir is not the same as creating a folder in Downloads.
-- **PTY output in Compose**: commands may succeed while the transcript drops lines — see PHASE1_STATUS handoff.
 - **Background execution**: OEMs may still kill the app (`TerminalService` is not started yet)
 - **npm/yarn**: Won't work on external storage (symlink-dependent)
 
